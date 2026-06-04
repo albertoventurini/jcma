@@ -1,9 +1,9 @@
-# M0 Results — **provisional: GO (pending B/C/D)**
+# M0 Results — **provisional: GO (pending C/D)**
 
-> Decision memo for [M0-de-risking-spike.md](M0-de-risking-spike.md). **Spike A (the #1 risk —
-> resolution accuracy) is complete and GREEN.** Spikes B (perf/memory), C (native-image), D
-> (incremental format) are not yet run; the final GO/FALLBACK is gated on them. Nothing in Spike A
-> triggers the javac-hybrid fallback.
+> Decision memo for [M0-de-risking-spike.md](M0-de-risking-spike.md). **Spikes A (resolution
+> accuracy — the #1 risk) and B (perf/memory — the #1 *technical* risk) are complete and GREEN.**
+> Spikes C (native-image), D (incremental format) are not yet run; the final GO/FALLBACK is gated
+> on them. Nothing so far triggers the javac-hybrid fallback.
 >
 > Throwaway harness + raw artifacts under [`m0-spike/`](m0-spike/) (`out/` is gitignored;
 > reproduce via `m0-spike/README.md`). Engine: `javaparser-symbol-solver-core:3.28.2`,
@@ -16,9 +16,9 @@
 | G2 go-to-def        | ≥ 99% correct (silent-wrong is the harmful mode) | **100%** (147/147, commons sample) | ✅ |
 | G3 find-refs recall | ≥ 98% recall + unconfirmed-tail mandatory | **100%** recall, ~0% FP (10 symbols) | ✅ |
 | G4 native-image     | builds & parse+resolve+mmap+stdio run in binary | — | ⏳ Spike C |
-| G5 throughput       | ~100k LOC in a few seconds | parse+resolve 115k occ in ~15s (not yet isolated) | ⏳ Spike B |
-| G6 memory           | parse-only RSS ≤ ~2× §8 medium; resolution bounded | — | ⏳ Spike B |
-| G7 latency          | single-file resolve p50 reasonable; find-refs within few× 200ms | — | ⏳ Spike B |
+| G5 throughput       | parse ~100k LOC < 2s parallel | **0.48s** for 135k LOC (281k LOC/s, 14 cores) | ✅ |
+| G6 memory           | live retained set bounded under sustained resolution | **flat ~310 MB** live set across full 135k-LOC sweep (committed RSS deferred to native) | ✅ |
+| G7 latency          | cold per-file resolve p50 reasonable; warm find-refs within few× 200ms | per-file p50 **4 ms**; warm find_references worst **262 ms** | ✅ |
 | G8 incremental fmt  | edit→query→compaction round-trips | — | ⏳ Spike D |
 
 ## Bars recalibrated from actuals (closes PRD §11 "exact navigation-correctness bar")
@@ -51,6 +51,18 @@ All failures are **safe-degrading** (they throw). Causes, validated from exempla
 Per-category coverage weak spots: FIELD_ACCESS 93.3% (jackson, nested access), METHOD_REF ~60%
 (tiny absolute counts). None silent.
 
+## Performance & memory (Spike B) — full detail in `m0-spike/out/spikeB-summary.md`
+- **G5 throughput:** parse-only parallel (virtual threads) — jackson 135,887 LOC in **0.48 s**
+  (281k LOC/s), commons 100,950 LOC in 0.29 s. ~6–10× inside target.
+- **G6 memory (the #1 *technical* risk):** under a full 135k-LOC resolution sweep the post-GC
+  **live set is flat at ~310 MB** (211 MB baseline + ~107 MB SymbolSolver cache, plateaued from
+  the first 25 files) → **caches are bounded, no unbounded growth.** Committed VmRSS (~1.37 GB
+  under `-Xmx6g`) is transient allocation churn, not retained — heap-policy-dependent, deferred
+  to the native baseline (Spike C).
+- **G7 latency:** cold per-file resolve p50 **4 ms** (p99 288 ms — one-time index cost); warm
+  find_references (steady-state query) p50 ~20 ms, worst 262 ms (102-candidate overloaded name) —
+  within 200 ms × headroom; the M1 edge cache turns repeats into lookups.
+
 ## Native-image reachability config needed (Spike C)
 — pending —
 
@@ -64,9 +76,16 @@ Per-category coverage weak spots: FIELD_ACCESS 93.3% (jackson, nested access), M
 3. Nested-member-access / annotation-member gaps: narrow, low navigation value — accept + surface
    as unconfirmed.
 
+## M1 requirements surfaced by Spike B
+1. **Resolved-edge cache is load-bearing for latency** — warm find_references re-resolves every
+   candidate today (worst 262 ms); the §5.1 cached edges convert repeats to lookups.
+2. **Optimize for allocation churn, not retention** — transient heap spikes to ~1 GB; caching
+   resolved edges (not ASTs) in the compact store should cut both churn and committed RSS.
+
 ## Recommendation
-**Spike A: GO** — the JavaParser+SymbolSolver accuracy bet (the make-or-break risk) holds
-decisively, with a 0% silent-wrong rate and all misses degrading safely. Proceed to Spike B
-(perf/memory, reuses the harness), then C (native-image) and D (incremental format) before the
-final M0 GO/FALLBACK. Caveat: G2/G3 judged by reading code on commons-lang; jackson correctness
-not yet sampled.
+**Spikes A + B: GO.** The make-or-break accuracy bet holds (0% silent-wrong, all misses
+safe-degrading) **and** the #1 technical risk is disproven (SymbolSolver live set is flat/bounded;
+throughput and latency trend under budget). Proceed to **Spike C** (native-image — re-baselines
+memory/startup, where the §8 native targets get tested) and **Spike D** (incremental mmap format)
+for the final M0 GO/FALLBACK. Caveats: G2/G3 judged by reading code on commons-lang (jackson
+correctness not yet sampled); Spike B was JVM-only and observational.

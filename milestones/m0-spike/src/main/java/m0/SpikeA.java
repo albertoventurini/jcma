@@ -73,13 +73,13 @@ public final class SpikeA {
 
     // ---------------------------------------------------------------- shared
 
-    private static List<Path> javaFiles(Path src) throws IOException {
+    static List<Path> javaFiles(Path src) throws IOException {
         try (Stream<Path> s = Files.walk(src)) {
             return s.filter(p -> p.toString().endsWith(".java")).sorted().toList();
         }
     }
 
-    private static CompilationUnit parse(SolverSetup.Wiring w, Path f) {
+    static CompilationUnit parse(SolverSetup.Wiring w, Path f) {
         try {
             ParseResult<CompilationUnit> r = w.parser().parse(f);
             return r.isSuccessful() ? r.getResult().orElse(null) : null;
@@ -155,7 +155,7 @@ public final class SpikeA {
     }
 
     /** Occurrence categories present in a CU, in a stable order. */
-    private static List<Map.Entry<Cat, Node>> occurrences(CompilationUnit cu) {
+    static List<Map.Entry<Cat, Node>> occurrences(CompilationUnit cu) {
         List<Map.Entry<Cat, Node>> out = new ArrayList<>();
         cu.findAll(MethodCallExpr.class).forEach(n -> out.add(Map.entry(Cat.METHOD_CALL, n)));
         cu.findAll(ObjectCreationExpr.class).forEach(n -> out.add(Map.entry(Cat.OBJ_CREATION, n)));
