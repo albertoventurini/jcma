@@ -1,0 +1,14 @@
+# Build output
+target/
+*.class
+# maven-shade-plugin generated
+dependency-reduced-pom.xml
+
+# M0 spike: upstream corpus clones (re-created via README reproduce steps) and extracted classpaths
+milestones/m0-spike/corpus/
+
+# Editor / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
