@@ -23,6 +23,12 @@ So this degrades **project-symbol** accuracy, which collides with the §M0 "0 si
   seam + native-image), §5.1 (fingerprint/freshness model — the cache mirrors it); this task's
   M0-RESULTS finding.
 
+## Sequencing
+Recommended **immediately after task-02** (context is hot). Does **not** block the index tasks 3–9
+(storage/CSR/trigram/freshness — none need JDK resolution), but **must land before task-10**
+(lazy-resolve-and-cache: definition & references) so find-refs/overload correctness is measured
+against the real solver, not a JDK-blind one — and before the M2 MCP surface ships to the agent.
+
 ## Protocol (test-first; full version in the overview)
 **Calibrate first**, then write failing tests + fixtures → **STOP for review** → implement → verify.
 
