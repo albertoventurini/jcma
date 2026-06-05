@@ -133,6 +133,8 @@ public final class Main {
                                        FQN, signature, and declaration site
                   index-dump --symbols <indexDir>
                                        list the symbols + monikers in a persisted index store
+                  index-dump --edges <indexDir> <moniker>
+                                       print a symbol's fwd/rev neighbours with edge types
                 """);
     }
 }
