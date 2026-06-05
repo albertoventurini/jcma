@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Workspace fixture: a pom that overrides the source directory to "java" (not the standard
+     src/main/java). WorkspaceTest asserts discoverSourceRoots() honours that override. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>jcma.fixture</groupId>
+  <artifactId>ws-custom-srcdir</artifactId>
+  <version>0.0.1</version>
+  <build>
+    <sourceDirectory>java</sourceDirectory>
+  </build>
+</project>

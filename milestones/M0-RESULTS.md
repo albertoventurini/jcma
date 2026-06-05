@@ -139,6 +139,19 @@ FFM mmap, and the MCP stdio loop **all run in the binary**.
    symbols (`JarTypeSolver` over real jars). Whether agent-traced metadata scales to that surface,
    or wants a native-friendlier solver strategy, is an early-M1 spike (Spike C did not run the
    `JarTypeSolver` stretch).
+   > **ANSWERED — M1 Task-02 (2026-06-05).** Ran the `JarTypeSolver` stretch natively (a
+   > Gradle-built fixture jar; `crossJarSmoke` task). The blocker was **not** reflection metadata:
+   > with the **existing task-01 reachability seed unchanged** (104 lines, traced from parse+mmap),
+   > the native binary resolves both `JavaSymbolSolver` source→source (commons-lang site #1 →
+   > `ToStringStyle.java:2089`) *and* `JarTypeSolver` cross-jar — i.e. resolution needed **zero new
+   > reflection entries**, strengthening G4's "minimal resolve needs zero hand-written reflection
+   > config." The real gap was a **URL protocol**: `JarTypeSolver` reads dependency class bytes
+   > through *javassist*, whose `JarClassPath.openClassfile` fetches them via `jar:…!/…` URLs
+   > (`URL.openConnection().getInputStream()`). native-image disables the `jar:` protocol by
+   > default, so cross-jar resolution failed at runtime with `javassist.NotFoundException` until we
+   > added **`--enable-url-protocols=jar`** to the native build args. No hand-edited reflection
+   > entries, and no native-friendlier solver, were needed — javassist's byte-parsing (no runtime
+   > classloading) is already the native-correct strategy. **Verdict: ratified, with one build flag.**
 
 ## Recommendation — **GO**
 **All four spikes GREEN; proceed on the JavaParser + JavaSymbolSolver + GraalVM-native-image +

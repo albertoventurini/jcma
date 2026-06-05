@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Workspace fixture: a pom with no <sourceDirectory>. WorkspaceTest asserts discoverSourceRoots()
+     falls back to the Maven standard layout (src/main/java). -->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>jcma.fixture</groupId>
+  <artifactId>ws-standard</artifactId>
+  <version>0.0.1</version>
+</project>
