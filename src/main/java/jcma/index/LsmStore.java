@@ -256,6 +256,29 @@ public final class LsmStore implements AutoCloseable {
         return new ArrayList<>(byMoniker.values());
     }
 
+    /**
+     * The live declarations of {@code fileId}: its overlay slice if the file is overlaid (an edit or
+     * an empty tombstone), else its base rows. Tier-1 freshness (task-11c) reads this <em>before</em>
+     * an {@code applyEdit} to diff a file's old vs. new node set. Phantoms are never file-owned, so
+     * they cannot appear here.
+     */
+    public List<Symbol> symbolsOf(int fileId) {
+        FileIndex ov = edited.get(fileId);
+        if (ov != null) {
+            return new ArrayList<>(ov.symbols());
+        }
+        List<Symbol> out = new ArrayList<>();
+        if (baseSym != null) {
+            for (int id = 0; id < baseSym.size(); id++) {
+                Symbol s = baseSym.symbol(id);
+                if (s.fileId() == fileId) {
+                    out.add(s);
+                }
+            }
+        }
+        return out;
+    }
+
     /** Number of files currently held in the overlay (edited or tombstoned since the last compaction). */
     public int overlayFileCount() {
         return edited.size();

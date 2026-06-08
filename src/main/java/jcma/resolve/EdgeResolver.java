@@ -104,6 +104,18 @@ public final class EdgeResolver implements AutoCloseable {
         return new EdgeResolver(store, usageIndex, fileTable, engine, new Indexer(), repoRoot, metrics);
     }
 
+    /**
+     * Open a resolver over an <b>already-constructed</b> shared state — used by {@code AnalysisSession}
+     * so the Tier-1 freshness guard and this Tier-2 resolver mutate and read the <em>same</em> live
+     * {@link LsmStore} + {@link FileTable} + {@link Indexer} (the prerequisite for the node-diff
+     * cascade, task-11c). {@link #close()} closes the shared store, so the session must own a single
+     * resolver as the store's closer.
+     */
+    public static EdgeResolver over(LsmStore store, UsageNameIndex usageIndex, FileTable fileTable,
+            AnalysisEngine engine, Indexer indexer, Path repoRoot, Metrics metrics) {
+        return new EdgeResolver(store, usageIndex, fileTable, engine, indexer, repoRoot, metrics);
+    }
+
     /** Declarations whose simple name equals {@code name} (the by-name target selector). */
     public List<Symbol> declarations(String name) {
         List<Symbol> out = new ArrayList<>();
@@ -279,6 +291,135 @@ public final class EdgeResolver implements AutoCloseable {
             metrics.counter("resolve.files").add(1);
         } catch (IOException skip) {
             // parse failure: leave the file warm (it cannot resolve), surface nothing
+        }
+    }
+
+    // ------------------------------------------------------------------ task-11c cascade support
+
+    /** The file id for {@code file} (repo-relative lookup), or {@code -1} if untracked. */
+    public int fileId(Path file) {
+        return fileIdOf(file);
+    }
+
+    /**
+     * Shed the engine's cached cross-file view so subsequent (re-)resolutions reflect the current
+     * bytes on disk (task-11c). Called by the cascade once a re-index has changed a file — otherwise
+     * the resolver would re-resolve a referrer against a stale cached AST of the edited file.
+     */
+    public void refreshEngine() {
+        engine.refresh();
+    }
+
+    /** The hierarchy ({@code EXTENDS}/{@code IMPLEMENTS}/{@code OVERRIDES}) edges out of {@code moniker}. */
+    public Set<MonikerEdge> hierarchyOut(String moniker) {
+        Set<MonikerEdge> out = new HashSet<>();
+        for (MonikerEdge e : store.fwd(moniker)) {
+            if (e.type() == EdgeType.EXTENDS || e.type() == EdgeType.IMPLEMENTS || e.type() == EdgeType.OVERRIDES) {
+                out.add(e);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Re-sync the in-memory symbol caches ({@code symbolsByFile}, {@code symbolByMoniker}) for
+     * {@code fileId} from the store — called after a Tier-1 reindex so occurrence attribution
+     * ({@code enclosingMoniker}) and display use the file's <em>current</em> declarations, not the
+     * built-once-at-open set (which a rename/add/remove would leave stale).
+     */
+    public void refreshSymbols(int fileId) {
+        for (Symbol s : symbolsByFile.getOrDefault(fileId, List.of())) {
+            symbolByMoniker.remove(s.moniker());
+        }
+        List<Symbol> now = store.symbolsOf(fileId);
+        symbolsByFile.put(fileId, new ArrayList<>(now));
+        for (Symbol s : now) {
+            symbolByMoniker.put(s.moniker(), s);
+        }
+    }
+
+    /**
+     * Eagerly (re-)resolve {@code fileId} into the graph — the changed file is resolved as part of the
+     * cascade so a new hierarchy edge becomes visible for the diff. Leaves the file <b>warm</b>.
+     */
+    public void reResolve(int fileId) {
+        warmFiles.add(fileId);
+        Path path = absPathOf(fileId);
+        if (path == null || !Files.isRegularFile(path)) {
+            return;
+        }
+        try {
+            resolveFile(fileId, path);
+            metrics.counter("resolve.files").add(1);
+        } catch (IOException skip) {
+            // parse failure: leave the file warm (it cannot resolve), surface nothing
+        }
+    }
+
+    /**
+     * Return {@code fileId} to <b>unresolved</b>: re-apply its Tier-1-only slice (dropping its resolved
+     * Tier-2 edges, including any now-stale binding) and clear its warm status, so the next query that
+     * touches it re-resolves it lazily.
+     */
+    public void dropTier2(int fileId) throws IOException {
+        Path path = absPathOf(fileId);
+        if (path == null || !Files.isRegularFile(path)) {
+            return;
+        }
+        store.applyEdit(indexer.indexFile(fileId, path, sourceSetOf(fileId)));
+        refreshSymbols(fileId);
+        warmFiles.remove(fileId);
+    }
+
+    /**
+     * Walk the reverse edges of every changed node and return the exact <b>referrer files</b> to
+     * unresolved (M1 task-11c). For each changed moniker, {@code rev(moniker)} gives the confirmed
+     * referrers (excluding the structural {@code CONTAINS} edge); for each changed simple name,
+     * {@code rev(name~UNRESOLVED)} gives the unconfirmed referrers (so a newly-defined name re-binds).
+     * Only files <b>warm</b> in this session are dropped (a non-warm referrer re-resolves lazily on
+     * first touch anyway); {@code exclude} skips the just-re-resolved changed files. Returns the set of
+     * referrer files actually returned to unresolved.
+     */
+    public Set<Path> invalidateReferrers(Set<String> changedMonikers, Set<String> changedNames,
+            Set<Integer> exclude) throws IOException {
+        Set<Integer> referrers = new HashSet<>();
+        for (String moniker : changedMonikers) {
+            for (MonikerEdge e : store.rev(moniker)) {
+                if (e.type() != EdgeType.CONTAINS) {
+                    addReferrer(referrers, e);
+                }
+            }
+        }
+        for (String name : changedNames) {
+            for (MonikerEdge e : store.rev(name + UNRESOLVED_SUFFIX)) {
+                addReferrer(referrers, e);
+            }
+        }
+        referrers.removeAll(exclude);
+
+        Set<Path> files = new HashSet<>();
+        for (int fid : referrers) {
+            if (fid < 0 || !warmFiles.contains(fid)) {
+                continue; // not cached this session → lazy re-resolution will redo it correctly
+            }
+            dropTier2(fid);
+            Path p = absPathOf(fid);
+            if (p != null) {
+                files.add(p.toAbsolutePath().normalize());
+            }
+        }
+        return files;
+    }
+
+    /** The file that owns edge {@code e}: its occurrence's file, or the declaring file of its src moniker. */
+    private void addReferrer(Set<Integer> referrers, MonikerEdge e) {
+        int fid = e.occurrence().fileId();
+        if (fid < 0) {
+            Symbol src = symbolByMoniker.get(e.src());
+            fid = src == null ? -1 : src.fileId();
+        }
+        if (fid >= 0) {
+            referrers.add(fid);
         }
     }
 

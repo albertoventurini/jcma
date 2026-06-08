@@ -76,6 +76,9 @@ public final class Main {
             case "supertypes" -> {
                 return Supertypes.run(args, out, err);
             }
+            case "repl" -> {
+                return Repl.run(args, out, err);
+            }
             default -> {
                 err.println("jcma: unknown subcommand '" + cmd + "'");
                 usage(err);
@@ -177,6 +180,8 @@ public final class Main {
                   supertypes <repo> <symbol>
                                        print a symbol's EXTENDS/IMPLEMENTS/OVERRIDES edges in both
                                        directions (supertypes out, subtypes/overriders in)
+                  repl <repo>          long-running query loop over one live session (warm edge
+                                       cache + live node-diff cascade on out-of-band edits)
                 """);
     }
 }

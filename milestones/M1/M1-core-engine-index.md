@@ -139,6 +139,17 @@ java-lsp/
 | 11c | [task-11c-node-diff-cascade.md](tasks/task-11c-node-diff-cascade.md) | Node-diff cascade invalidation + tree-scan `FreshnessSource` |
 | 12 | [task-12-query-serving.md](tasks/task-12-query-serving.md) | Virtual-thread cancellable, time-boxed query serving |
 
+> **Built early in 11c (recorded per the keep-in-sync convention):** the session-scoped owner
+> **`AnalysisSession`** (`jcma.session`) — the one live `(store, FileTable, Indexer, engine, FreshnessGuard,
+> EdgeResolver)` per process — landed in 11c (not deferred to 12/M2), because the node-diff cascade needs
+> a single shared in-memory state to act on. It runs *refresh → cascade → serve* per query; the one-shot
+> CLI (`refs`/`def`/`supertypes`) and a tiny `jcma repl` driver are built on it. **Task-12 still owns**
+> cancellation + time-boxing (wrapping `AnalysisSession`), and **M2** still owns the MCP transport.
+> Also in 11c: a project **type reference now resolves to its type node** (`app/Foo#`) instead of an
+> external phantom, so the supertype cascade reaches referrers via `rev(type)` (an engine `describe()`
+> fix; external types stay phantoms). The engine gained `refresh()` (rebuild source solvers, reuse the
+> jar/JDK indexes) so a re-indexed file is re-resolved against disk, not a stale cached AST.
+
 ## Exit criteria (definition of done)
 
 - All 12 tasks green (unit + integration), `nativeCompile` green, native CLI smoke passing.

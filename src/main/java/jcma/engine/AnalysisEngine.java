@@ -48,4 +48,15 @@ public interface AnalysisEngine {
      * (→ phantom node).
      */
     List<ResolvedHierarchy> resolveHierarchy(ParsedUnit unit);
+
+    /**
+     * Drop any cached parse/type-solver state for source files so the next resolution reflects the
+     * current bytes on disk (M1 task-11c freshness). MCP gives no change channel, so when a file is
+     * re-indexed mid-session the engine must be told its cross-file view is stale — otherwise it would
+     * resolve against a cached AST of the old source. The default is a no-op (an engine with no cache);
+     * {@link JavaParserEngine} rebuilds its source type-solvers (reusing the stable jar/JDK solvers).
+     */
+    default void refresh() {
+        // no cached state by default
+    }
 }

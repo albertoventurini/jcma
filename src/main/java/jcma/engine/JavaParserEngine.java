@@ -22,6 +22,7 @@ import com.github.javaparser.ast.nodeTypes.NodeWithExtends;
 import com.github.javaparser.ast.nodeTypes.NodeWithImplements;
 import com.github.javaparser.ast.nodeTypes.NodeWithTypeArguments;
 import com.github.javaparser.ast.type.ClassOrInterfaceType;
+import com.github.javaparser.resolution.TypeSolver;
 import com.github.javaparser.resolution.declarations.AssociableToAST;
 import com.github.javaparser.resolution.declarations.ResolvedConstructorDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedMethodDeclaration;
@@ -29,8 +30,10 @@ import com.github.javaparser.resolution.declarations.ResolvedMethodLikeDeclarati
 import com.github.javaparser.resolution.declarations.ResolvedReferenceTypeDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedTypeDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedValueDeclaration;
+import com.github.javaparser.resolution.model.SymbolReference;
 import com.github.javaparser.resolution.types.ResolvedReferenceType;
 import com.github.javaparser.symbolsolver.JavaSymbolSolver;
+import com.github.javaparser.symbolsolver.javaparsermodel.JavaParserFacade;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.CombinedTypeSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.JarTypeSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.JavaParserTypeSolver;
@@ -60,39 +63,72 @@ public final class JavaParserEngine implements AnalysisEngine {
     /** Set {@code JCMA_DEBUG} to print the underlying cause of a guarded (swallowed) resolve. */
     private static final boolean DEBUG = System.getenv("JCMA_DEBUG") != null;
 
-    private final JavaParser parser;
+    // The immutable input solvers (JDK + dependency jars), each wrapped so it tolerates being re-added
+    // to a fresh CombinedTypeSolver on every refresh() — the wrapper holds the (once-built) jar/JDK
+    // index, so refresh re-indexes nothing. Source roots are NOT wrapped: a fresh JavaParserTypeSolver
+    // is built per refresh so its parsed-AST cache starts empty (task-11c freshness).
+    private final TypeSolver jdkSolver; // null if the native-image JDK index is unavailable
+    private final List<TypeSolver> jarSolvers;
+    private final List<Path> sourceRoots;
+    private volatile JavaParser parser;
 
     public JavaParserEngine(Workspace workspace) {
-        // CombinedTypeSolver = JDK + each project source root + every dependency jar.
-        CombinedTypeSolver solver = new CombinedTypeSolver();
         // JDK (kept first, mirroring the M0 spike order). Native-image serves reflection only for
         // build-time-registered classes, so under native-image we resolve the JDK from a host-derived
         // byte-parsed jar (Task-02b); on the JVM/dev path reflection is a known-good fallback (host
         // classes are loaded). Selector avoids any GraalVM class dependency.
+        TypeSolver jdk = null;
         if ("runtime".equals(System.getProperty("org.graalvm.nativeimage.imagecode"))) {
-            HostJdkIndex.resolveCacheJar().ifPresent(jar -> {
+            var jarOpt = HostJdkIndex.resolveCacheJar();
+            if (jarOpt.isPresent()) {
                 try {
-                    solver.add(new JarTypeSolver(jar));
+                    jdk = new JarTypeSolver(jarOpt.get());
                 } catch (IOException e) {
                     if (DEBUG) {
                         System.err.println("  skip JDK index: " + e);
                     }
                 }
-            });
-        } else {
-            solver.add(new ReflectionTypeSolver(false));
-        }
-        for (Path sourceRoot : workspace.sourceRoots()) {
-            if (Files.isDirectory(sourceRoot)) {
-                solver.add(new JavaParserTypeSolver(sourceRoot));
             }
+        } else {
+            jdk = new ReflectionTypeSolver(false);
         }
+        this.jdkSolver = jdk == null ? null : new StableSolver(jdk);
+        List<TypeSolver> jars = new ArrayList<>();
         for (Path jar : workspace.classpathJars()) {
             try {
-                solver.add(new JarTypeSolver(jar));
+                jars.add(new StableSolver(new JarTypeSolver(jar)));
             } catch (IOException e) {
                 System.err.println("  skip jar (" + e.getMessage() + "): " + jar);
             }
+        }
+        this.jarSolvers = List.copyOf(jars);
+        List<Path> roots = new ArrayList<>();
+        for (Path sourceRoot : workspace.sourceRoots()) {
+            if (Files.isDirectory(sourceRoot)) {
+                roots.add(sourceRoot);
+            }
+        }
+        this.sourceRoots = List.copyOf(roots);
+        this.parser = buildParser();
+    }
+
+    /**
+     * Build a parser over a <b>fresh</b> {@code CombinedTypeSolver} = JDK + source roots + jars (the M0
+     * spike order). A fresh combined solver is what sheds the stale view on {@link #refresh()}: it has
+     * its own type cache (and a new {@code JavaParserFacade} keyed by it), and its source
+     * {@link JavaParserTypeSolver}s start with empty AST caches. The wrapped jar/JDK solvers are reused
+     * as-is (their indexes are not rebuilt) and tolerate the re-parenting a fresh combined solver does.
+     */
+    private JavaParser buildParser() {
+        CombinedTypeSolver solver = new CombinedTypeSolver();
+        if (jdkSolver != null) {
+            solver.add(jdkSolver);
+        }
+        for (Path sourceRoot : sourceRoots) {
+            solver.add(new JavaParserTypeSolver(sourceRoot)); // fresh → empty parsed-AST cache
+        }
+        for (TypeSolver jar : jarSolvers) {
+            solver.add(jar);
         }
         // RAW skips the post-parse language-level validators (see StructuralParser): they read node
         // properties through JavaParser's reflective meta-model, which is a native-image NoSuchFieldError
@@ -101,7 +137,21 @@ public final class JavaParserEngine implements AnalysisEngine {
         ParserConfiguration config = new ParserConfiguration()
                 .setLanguageLevel(LanguageLevel.RAW)
                 .setSymbolResolver(new JavaSymbolSolver(solver));
-        this.parser = new JavaParser(config);
+        return new JavaParser(config);
+    }
+
+    /**
+     * Shed the engine's stale cross-file view so the next resolution reflects the current bytes on disk
+     * (task-11c). A fresh {@code CombinedTypeSolver}/parser drops <em>all</em> the stale caches at once —
+     * the source parsed-AST caches, the combined solver's type cache, and the per-solver
+     * {@link JavaParserFacade} resolution cache — while the wrapped jar/JDK indexes are reused (no
+     * re-indexing). {@link JavaParserFacade#clearInstances()} also evicts the now-dead facade for the
+     * old solver so its static map does not grow across edits.
+     */
+    @Override
+    public void refresh() {
+        JavaParserFacade.clearInstances();
+        this.parser = buildParser();
     }
 
     @Override
@@ -291,11 +341,17 @@ public final class JavaParserEngine implements AnalysisEngine {
             return new ResolvedTarget(v.getName(), type + " " + v.getName(), loc.file(), loc.line(), DeclKind.FIELD);
         }
         if (r instanceof com.github.javaparser.resolution.types.ResolvedType rt) {
+            // A reference type carries a type *declaration*; unwrap to it so a reference to a PROJECT
+            // type locates its source (→ real moniker app/Foo#), not the external-phantom fallback
+            // (task-11c). A jar/JDK type's declaration has no AST → still resolves to a ~fqn phantom.
+            if (rt.isReferenceType()) {
+                Optional<ResolvedReferenceTypeDeclaration> decl = rt.asReferenceType().getTypeDeclaration();
+                if (decl.isPresent()) {
+                    return describe(decl.get());
+                }
+            }
             String desc = safe(rt::describe);
-            DeclKind kind = rt.isReferenceType()
-                    ? rt.asReferenceType().getTypeDeclaration().map(JavaParserEngine::typeKind).orElse(DeclKind.OTHER)
-                    : DeclKind.OTHER;
-            return new ResolvedTarget(desc, desc, loc.file(), loc.line(), kind);
+            return new ResolvedTarget(desc, desc, loc.file(), loc.line(), DeclKind.OTHER);
         }
         String s = String.valueOf(r);
         return new ResolvedTarget(s, s, loc.file(), loc.line(), DeclKind.OTHER);
@@ -410,6 +466,46 @@ public final class JavaParserEngine implements AnalysisEngine {
             return file == null ? Loc.EXTERNAL : new Loc(file, line);
         } catch (Throwable t) {
             return Loc.EXTERNAL;
+        }
+    }
+
+    // ---------------------------------------------------------------- reusable stable solver
+
+    /**
+     * Wraps an immutable input solver (a {@link JarTypeSolver} or {@link ReflectionTypeSolver}) so it
+     * can be re-added to a fresh {@code CombinedTypeSolver} on every {@link #refresh()} without its
+     * index being rebuilt and without the one-parent rule tripping (task-11c). The inner solver's
+     * parent is fixed to this wrapper once; the wrapper's own parent is re-settable, so each rebuild
+     * re-points the delegation chain at the current combined solver while the wrapped index is reused.
+     */
+    private static final class StableSolver implements TypeSolver {
+
+        private final TypeSolver inner;
+        private TypeSolver parent;
+
+        StableSolver(TypeSolver inner) {
+            this.inner = inner;
+            inner.setParent(this); // inner delegates upward through this wrapper (set exactly once)
+        }
+
+        @Override
+        public TypeSolver getParent() {
+            return parent;
+        }
+
+        @Override
+        public void setParent(TypeSolver parent) {
+            this.parent = parent; // lenient: a fresh combined solver re-parents us on each rebuild
+        }
+
+        @Override
+        public SymbolReference<ResolvedReferenceTypeDeclaration> tryToSolveType(String name) {
+            return inner.tryToSolveType(name);
+        }
+
+        @Override
+        public SymbolReference<ResolvedReferenceTypeDeclaration> tryToSolveTypeInModule(String module, String name) {
+            return inner.tryToSolveTypeInModule(module, name);
         }
     }
 }

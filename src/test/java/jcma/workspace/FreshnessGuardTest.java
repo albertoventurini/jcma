@@ -78,7 +78,7 @@ class FreshnessGuardTest {
 
         try (LsmStore store = LsmStore.open(indexDir(repo), CompactionPolicy.manual())) {
             FreshnessGuard g = guard(repo, store);
-            assertFalse(g.reindexOne(mainFile(repo, "Alpha")), "an unchanged file is not re-parsed");
+            assertFalse(g.reindexOne(mainFile(repo, "Alpha")).reindexed(), "an unchanged file is not re-parsed");
             assertTrue(store.contains(PKG + "Alpha#alpha()."), "the symbol is intact");
         }
     }
@@ -94,7 +94,7 @@ class FreshnessGuardTest {
             writeClass(repo.resolve("src/main/java"), "Alpha", "renamedMethod"); // changes bytes + size
             bumpMtime(mainFile(repo, "Alpha"));
 
-            assertTrue(g.reindexOne(mainFile(repo, "Alpha")), "a changed file is re-parsed");
+            assertTrue(g.reindexOne(mainFile(repo, "Alpha")).reindexed(), "a changed file is re-parsed");
             assertTrue(store.contains(PKG + "Alpha#renamedMethod()."), "the new symbol is indexed");
             assertFalse(store.contains(PKG + "Alpha#alpha()."), "the old symbol is gone");
         }
@@ -110,7 +110,7 @@ class FreshnessGuardTest {
 
             bumpMtime(mainFile(repo, "Alpha")); // size+mtime differ, but the bytes (hash) do not
 
-            assertFalse(g.reindexOne(mainFile(repo, "Alpha")), "the hash proves the bytes are unchanged → no re-parse");
+            assertFalse(g.reindexOne(mainFile(repo, "Alpha")).reindexed(), "the hash proves the bytes are unchanged → no re-parse");
             assertTrue(store.contains(PKG + "Alpha#alpha()."), "the symbol is intact");
         }
     }
@@ -127,7 +127,8 @@ class FreshnessGuardTest {
             writeClass(repo.resolve("src/main/java"), "Alpha", "outOfBand");
             bumpMtime(mainFile(repo, "Alpha"));
 
-            assertTrue(g.ensureFresh(mainFile(repo, "Alpha")), "the read path refreshes the stale file");
+            assertTrue(g.ensureFresh(mainFile(repo, "Alpha")).stream().anyMatch(NodeDiff::reindexed),
+                    "the read path refreshes the stale file");
             assertTrue(store.contains(PKG + "Alpha#outOfBand()."), "the edit is visible before the read returns");
             assertFalse(store.contains(PKG + "Alpha#alpha()."));
         }
@@ -144,7 +145,7 @@ class FreshnessGuardTest {
 
             Files.delete(mainFile(repo, "Alpha"));
 
-            assertTrue(g.reindexOne(mainFile(repo, "Alpha")), "a vanished file is reconciled");
+            assertTrue(g.reindexOne(mainFile(repo, "Alpha")).reindexed(), "a vanished file is reconciled");
             assertFalse(store.contains(PKG + "Alpha#alpha()."), "its symbols are tombstoned");
             assertFalse(store.contains(PKG + "Alpha#"));
             assertTrue(store.contains(PKG + "Beta#beta()."), "an untouched file is intact");
@@ -165,7 +166,7 @@ class FreshnessGuardTest {
             writeClass(repo.resolve("src/test/java"), "AlphaTest", "verifies"); // re-parse the test file
             bumpMtime(testFile);
 
-            assertTrue(g.reindexOne(testFile), "the changed test file is re-parsed");
+            assertTrue(g.reindexOne(testFile).reindexed(), "the changed test file is re-parsed");
             assertEquals(SourceSet.TEST, methodSourceSet(store, "verifies"),
                     "a re-parsed test file's symbols stay tagged TEST (recovered from the file row)");
         }

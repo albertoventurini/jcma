@@ -245,9 +245,14 @@ Task-09 for the full producer/backstop analysis.)
 - **During a session:** the freshness *trigger* is a swappable producer behind a `FreshnessSource`
   seam (Task-09). M1 ships the minimal **stat/hash-on-access** backstop on any queried file
   (negligible cost, guarantees freshness for files we actually read, no O(tree)-per-query, no
-  freshness window for read files). A proactive **filesystem watcher** is an *optional* drop-in
-  producer, **deferred past M1** (FFM-inotify as the native-clean upgrade, or an external watcher
-  process as the cross-platform escape hatch) — justified by measurement, not assumed.
+  freshness window for read files), **plus** a **tree-scan `FreshnessSource`** (Task-11c) — an
+  O(tree) poller that streams changed paths while the process is live (the signal is *complete*; only
+  latency is left to improve). A proactive **OS filesystem watcher** is the *optional* latency upgrade,
+  **deferred past M1** (FFM-inotify as the native-clean path, or an external watcher process as the
+  cross-platform escape hatch) — justified by measurement, not assumed. Both producers and the backstop
+  are owned by the session-scoped **`AnalysisSession`** (Task-11c), which holds the one live
+  store+resolver+guard for the process and runs *refresh → cascade → serve* per query; cancellation /
+  time-boxing (Task-12) and the MCP transport (M2) wrap it later.
 
 ### Invalidation — model-everything, node-diff cascade
 > *Revised (M1 task-11): the earlier "per-edge dependency fingerprint + changed-simple-name-set +

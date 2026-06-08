@@ -4,9 +4,10 @@ import jcma.index.EdgeType;
 import jcma.index.MonikerEdge;
 import jcma.index.Symbol;
 import jcma.obs.Metrics;
-import jcma.resolve.EdgeResolver;
+import jcma.session.AnalysisSession;
 import jcma.workspace.Workspace;
 
+import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,14 +35,14 @@ final class Supertypes {
             err.println("jcma: no index at " + indexDir + " — run `jcma index " + repo + "` first");
             return 1;
         }
-        try (EdgeResolver resolver = EdgeResolver.open(indexDir, Workspace.discover(repo), Metrics.noop())) {
-            List<Symbol> targets = resolver.declarations(symbol);
+        try (AnalysisSession session = AnalysisSession.open(indexDir, Workspace.discover(repo), Metrics.noop())) {
+            List<Symbol> targets = session.declarations(symbol);
             if (targets.isEmpty()) {
                 err.println("jcma: no declaration named '" + symbol + "' in the index");
                 return 1;
             }
             for (Symbol target : targets) {
-                print(out, resolver, target);
+                print(out, session, target);
             }
             return 0;
         } catch (Exception e) {
@@ -50,23 +51,23 @@ final class Supertypes {
         }
     }
 
-    private static void print(PrintStream out, EdgeResolver resolver, Symbol target) {
+    private static void print(PrintStream out, AnalysisSession session, Symbol target) throws IOException {
         out.printf("%nhierarchy of %s  [%s]%n", display(target), target.moniker());
-        List<MonikerEdge> supers = resolver.supertypes(target);
-        List<MonikerEdge> subs = resolver.subtypes(target);
+        List<MonikerEdge> supers = session.supertypes(target);
+        List<MonikerEdge> subs = session.subtypes(target);
         out.println("  supertypes (out):");
         if (supers.isEmpty()) {
             out.println("    (none)");
         }
         for (MonikerEdge e : supers) {
-            out.printf("    %-11s %s%n", label(e.type()), resolver.signatureOf(e.dst()));
+            out.printf("    %-11s %s%n", label(e.type()), session.signatureOf(e.dst()));
         }
         out.println("  subtypes / overriders (in):");
         if (subs.isEmpty()) {
             out.println("    (none)");
         }
         for (MonikerEdge e : subs) {
-            out.printf("    %-11s %s%n", label(e.type()), resolver.signatureOf(e.src()));
+            out.printf("    %-11s %s%n", label(e.type()), session.signatureOf(e.src()));
         }
     }
 

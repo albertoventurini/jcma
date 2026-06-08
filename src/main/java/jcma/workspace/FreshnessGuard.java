@@ -3,11 +3,14 @@ package jcma.workspace;
 import jcma.index.FileIndex;
 import jcma.index.Indexer;
 import jcma.index.LsmStore;
+import jcma.index.Symbol;
 import jcma.obs.Metrics;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * In-session freshness: the <b>on-access backstop</b> that keeps the index consistent with disk while
@@ -58,16 +61,23 @@ public final class FreshnessGuard {
 
     /**
      * The on-access backstop: make {@code file} (a file a query is about to read) fresh before the read
-     * returns, first draining any proactive {@link FreshnessSource} (empty in M1). Returns {@code true}
-     * if anything was reconciled (re-parsed or tombstoned).
+     * returns, first draining any proactive {@link FreshnessSource}. Returns the per-file {@link
+     * NodeDiff} for each path reconciled (drained dirty paths, then {@code file}) — the structural
+     * signal the Tier-2 {@code Cascade} consumes. A diff with {@link NodeDiff#reindexed()} {@code false}
+     * means that path was unchanged.
+     *
+     * <p>Note: this Tier-1 backstop does <em>not</em> itself run the cascade — it only re-parses and
+     * returns the diffs. The {@code AnalysisSession}/{@code Cascade} interleaves a re-resolution of the
+     * changed file (to surface hierarchy-edge changes) around {@link #reindexOne} and walks the reverse
+     * edges; this method stays the pure structural primitive.
      */
-    public boolean ensureFresh(Path file) throws IOException {
-        boolean changed = false;
+    public List<NodeDiff> ensureFresh(Path file) throws IOException {
+        List<NodeDiff> diffs = new ArrayList<>();
         for (Path dirty : source.drainChanged()) {
-            changed |= reindexOne(dirty);
+            diffs.add(reindexOne(dirty));
         }
-        changed |= reindexOne(file);
-        return changed;
+        diffs.add(reindexOne(file));
+        return diffs;
     }
 
     /**
@@ -84,41 +94,45 @@ public final class FreshnessGuard {
      * </ul>
      * The {@link FileTable} is persisted only when a row actually changed (so the common nothing-changed
      * query writes nothing). Compaction is left to the {@link LsmStore}'s {@code CompactionPolicy} —
-     * {@code applyEdit} triggers it; this never compacts per edit. Returns {@code true} iff it applied a
-     * store edit (re-parse or tombstone).
+     * {@code applyEdit} triggers it; this never compacts per edit. Returns the {@link NodeDiff} for the
+     * file: {@link NodeDiff#reindexed()} is true iff it applied a store edit (re-parse or tombstone),
+     * and the removed/added/signature-changed sets carry the structural delta the cascade walks.
      */
-    public boolean reindexOne(Path file) throws IOException {
+    public NodeDiff reindexOne(Path file) throws IOException {
         Path abs = file.isAbsolute() ? file.normalize() : repoRoot.resolve(file).normalize();
         Path rel = repoRoot.relativize(abs);
         FileTable.Entry row = table.get(rel);
         if (row == null) {
-            return false; // untracked → warm-reopen reconcile / task-11 territory
+            return NodeDiff.untracked(); // untracked → warm-reopen reconcile / new-file discovery territory
         }
         metrics.counter("freshness.checked").add(1);
+        int fid = row.fileId();
 
         if (!Files.exists(abs)) {                                 // MISSING → tombstone
-            store.applyEdit(FileIndex.deleted(row.fileId()));
+            List<Symbol> old = store.symbolsOf(fid);
+            store.applyEdit(FileIndex.deleted(fid));
             table.remove(rel);
             table.save(indexDir);
             metrics.counter("freshness.tombstoned").add(1);
-            return true;
+            return NodeDiff.tombstoned(fid, old);
         }
         if (statMatches(abs, row.fingerprint())) {                // fast path: no change
-            return false;
+            return NodeDiff.unchanged(fid);
         }
         Fingerprint fp = Fingerprint.of(abs);
         if (fp.contentHash() == row.fingerprint().contentHash()) { // SUSPECT → mtime-lie
-            table.put(rel, row.fileId(), fp, row.sourceSet());     // refresh stat; avoid rehashing next time
+            table.put(rel, fid, fp, row.sourceSet());              // refresh stat; avoid rehashing next time
             table.save(indexDir);
             metrics.counter("freshness.mtimeLie").add(1);
-            return false;
+            return NodeDiff.unchanged(fid);
         }
-        FileIndex fi = indexer.indexFile(row.fileId(), abs, row.sourceSet()); // CHANGED → re-parse
+        List<Symbol> old = store.symbolsOf(fid);
+        FileIndex fi = indexer.indexFile(fid, abs, row.sourceSet()); // CHANGED → re-parse
         store.applyEdit(fi);
-        table.put(rel, row.fileId(), fp, row.sourceSet());
+        table.put(rel, fid, fp, row.sourceSet());
         table.save(indexDir);
         metrics.counter("freshness.reindexed").add(1);
-        return true;
+        return NodeDiff.of(fid, old, fi.symbols());
     }
 
     /** True if {@code file}'s current size+mtime match {@code fp} (the cheap, no-hash fast path). */

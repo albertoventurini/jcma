@@ -2,11 +2,11 @@ package jcma.cli;
 
 import jcma.index.Symbol;
 import jcma.obs.Metrics;
-import jcma.resolve.EdgeResolver;
 import jcma.resolve.Ref;
 import jcma.resolve.ReferenceGroup;
 import jcma.resolve.References;
 import jcma.resolve.UnconfirmedRef;
+import jcma.session.AnalysisSession;
 import jcma.workspace.Workspace;
 
 import java.io.PrintStream;
@@ -35,14 +35,14 @@ final class Refs {
             err.println("jcma: no index at " + indexDir + " — run `jcma index " + repo + "` first");
             return 1;
         }
-        try (EdgeResolver resolver = EdgeResolver.open(indexDir, Workspace.discover(repo), Metrics.noop())) {
-            List<Symbol> targets = resolver.declarations(symbol);
+        try (AnalysisSession session = AnalysisSession.open(indexDir, Workspace.discover(repo), Metrics.noop())) {
+            List<Symbol> targets = session.declarations(symbol);
             if (targets.isEmpty()) {
                 err.println("jcma: no declaration named '" + symbol + "' in the index");
                 return 1;
             }
             for (Symbol target : targets) {
-                print(out, target, resolver.findReferences(target));
+                print(out, target, session.findReferences(target));
             }
             return 0;
         } catch (Exception e) {
