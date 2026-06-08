@@ -72,6 +72,16 @@ public final class JavaParserEngine implements AnalysisEngine {
     private final List<Path> sourceRoots;
     private volatile JavaParser parser;
 
+    // The source-root JavaParserTypeSolvers' own parser config. Built once and reused across every
+    // refresh() (unlike the engine parser's config, which rebinds its SymbolResolver to each rebuild's
+    // CombinedTypeSolver): this one carries NO resolver — the source solver only extracts type
+    // declarations by name — so it is refresh-invariant. RAW skips the post-parse language-level
+    // validators, same as buildParser()'s parser: those validators read node properties through
+    // JavaParser's reflective meta-model, a native-image NoSuchFieldError hazard (the JavaParserTypeSolver
+    // default is BLEEDING_EDGE, which runs them, so without this the source re-parse fails under native).
+    private final ParserConfiguration sourceSolverConfig =
+            new ParserConfiguration().setLanguageLevel(LanguageLevel.RAW);
+
     public JavaParserEngine(Workspace workspace) {
         // JDK (kept first, mirroring the M0 spike order). Native-image serves reflection only for
         // build-time-registered classes, so under native-image we resolve the JDK from a host-derived
@@ -125,7 +135,10 @@ public final class JavaParserEngine implements AnalysisEngine {
             solver.add(jdkSolver);
         }
         for (Path sourceRoot : sourceRoots) {
-            solver.add(new JavaParserTypeSolver(sourceRoot)); // fresh → empty parsed-AST cache
+            // RAW config (sourceSolverConfig) so this solver's own re-parses skip the validators'
+            // reflective meta-model access — native-image-safe; see the field's note. Fresh solver
+            // per rebuild → empty parsed-AST cache (task-11c freshness).
+            solver.add(new JavaParserTypeSolver(sourceRoot, sourceSolverConfig));
         }
         for (TypeSolver jar : jarSolvers) {
             solver.add(jar);

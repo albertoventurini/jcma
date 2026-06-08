@@ -263,3 +263,48 @@ tasks.register("jdkResolveSmoke") {
         println("jdk-resolve smoke OK — host-derived JDK index resolves a JDK target under native-image")
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// docs/native-jdk-resolution-gap.md — variant (b): the native regression guard for the resolution
+// gap. The JVM "cheap" repro (NativeJdkResolutionGapTest) did NOT reproduce — the host-JDK jar
+// resolves identically to reflection on the JVM — so the cause was native-runtime-specific. This
+// staged 2-file repo (`new Service().run()`, no pom/jars) running on the real binary reproduced the
+// miss, which exposed the root cause (the source-root JavaParserTypeSolver's own parser ran the
+// language-level validators, hitting JavaParser's reflective meta-model → NoSuchFieldError under
+// native-image). Fixed by giving that solver a RAW config (JavaParserEngine.sourceSolverConfig);
+// this smoke now asserts the fix holds. Mirrors jdkResolveSmoke.
+tasks.register("nativeJdkGapSmoke") {
+    group = "verification"
+    description = "Native repro of the JDK-resolution gap — does `new Service().run()` resolve under the native binary?"
+    dependsOn(tasks.named("nativeCompile"))
+    doLast {
+        val binary = layout.buildDirectory.file("native/nativeCompile/jcma").get().asFile
+        require(binary.exists()) { "native binary missing (run nativeCompile): $binary" }
+
+        // Stage the minimal 2-file repo. No pom and no jars: Workspace.discover derives the source
+        // root from the `package app;` declaration, so resolution is pure source + JDK ancestry walk.
+        val repo = layout.buildDirectory.dir("fixtures/native-jdk-gap").get().asFile
+        repo.deleteRecursively()
+        val appDir = repo.resolve("app").apply { mkdirs() }
+        appDir.resolve("Service.java").writeText(
+            "package app;\npublic class Service { public void run() { int x = 1; } }\n")
+        val client = appDir.resolve("Client.java")
+        client.writeText(
+            "package app;\npublic class Client { void go() { new Service().run(); } }\n")
+
+        // Client.java line 2: the `run` token starts at column 49 (`…new Service().run();`).
+        val proc = ProcessBuilder(binary.absolutePath, "resolve", client.absolutePath, "2:49")
+            .redirectErrorStream(true).start()
+        val output = proc.inputStream.bufferedReader().readText()
+        val code = proc.waitFor()
+        println(output)
+        val expected = "app.Service.run()"
+        if (code != 0 || !output.contains(expected)) {
+            throw GradleException(
+                "native JDK-gap repro: `new Service().run()` did NOT resolve under the native binary " +
+                    "(exit=$code) — expected `$expected`. This is the documented gap " +
+                    "(docs/native-jdk-resolution-gap.md). The JVM path resolves it; native does not:\n$output")
+        }
+        println("native JDK-gap smoke OK — `new Service().run()` resolves under native (gap closed)")
+    }
+}
