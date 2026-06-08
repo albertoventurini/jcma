@@ -60,3 +60,39 @@ JDK supertypes). This closes the calibration loop and confirms the go-decision: 
 - **JDK discovery is `JAVA_HOME`-only** for now; project-toolchain discovery is deferred (a future
   sibling of `Workspace`'s classpath discovery). Any failure degrades to no JDK solver + a
   `JCMA_DEBUG` diagnostic (parity with pre-02b native behaviour, now the exception not the rule).
+
+---
+
+## Task-12 — virtual-thread cancellable, time-boxed query serving
+
+### Locked design decisions (supersede the task doc's PRD-derived plan; user-approved 2026-06-08)
+1. **No cross-query concurrency, no partial-on-timeout.** The consumer is a coding agent that queries
+   one at a time, so the session stays single-writer; cross-query concurrency and best-effort partial
+   results are deferred optimizations. A timed-out query reports a clean timeout (`QueryTimeoutException`),
+   not a partial answer.
+2. **No `StructuredTaskScope`** — it is still a *preview* API in JDK 25 (JEP 505) and the build carries
+   no `--enable-preview` (which would thread through compile/test/run/native-image). Virtual threads are
+   stable, so `QueryService` uses a **single-thread virtual-thread executor** + `Future.get(deadline)` +
+   `cancel(true)`. Single-thread structurally enforces one-writer-at-a-time; the caller returns promptly
+   even if a worker stalls.
+3. **Cooperative cancel checkpoint** in `EdgeResolver.ensureResolved` (top of the candidate-file loop):
+   `Thread.currentThread().isInterrupted()` → unchecked `CancellationException`. Between files, never
+   mid-`applyEdit` (the overlay log is a plain `DataOutputStream`, not an interruptible NIO channel, so
+   an interrupt cannot tear it). `--deadline <ms>` on `refs`/`def`/`supertypes` + the REPL.
+
+### Measured (this machine: GraalVM/Temurin-class JDK 25; commons-lang corpus, n=200)
+- **§8/§Targets latency gate met with vast headroom — warm `find_references` p95 = 2.61 ms**
+  (p50 1.68 · p90 2.49 · p99 2.89 · max 6.53 ms), vs the < 200 ms budget. The Tier-2 edge cache turns
+  repeat queries into pure graph walks — confirms the M0 prediction (cold worst 262 ms → warm lookups).
+- **Cancellation/time-box**: a deadline-exceeded query throws `QueryTimeoutException` promptly and the
+  worker observes the interrupt and stops; a pre-interrupted `find_references` bails before resolving any
+  candidate file (`EdgeResolverCancellationTest`). No hang, no crash.
+
+### Caveats (carried)
+- **Test-heap floor for the corpus ITs.** The opt-in corpus ITs (`EdgeResolverCommonsIT`,
+  `QueryLatencyTest`; both `assumeTrue` a local, git-ignored commons-lang corpus) resolve a 527-file
+  project through JavaSymbolSolver, whose retained AST set overflows Gradle's default 512 MB test heap
+  into a GC death-spiral. Raised the test JVM to `maxHeapSize = "2g"` (build.gradle.kts). On a normal
+  checkout the corpus is absent and these skip, so CI is unaffected.
+- **Pre-existing perf hotspot (NOT task-12):** `EdgeResolverCommonsIT` takes ~721 s even at 2 g —
+  cold-resolving overloaded symbols across the whole corpus. Flagged for a separate look.

@@ -4,6 +4,7 @@ import jcma.engine.Position;
 import jcma.index.MonikerEdge;
 import jcma.index.Symbol;
 import jcma.obs.Metrics;
+import jcma.query.QueryService;
 import jcma.resolve.Definition;
 import jcma.resolve.Ref;
 import jcma.resolve.ReferenceGroup;
@@ -20,16 +21,18 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * {@code jcma repl <repo>} (M1 task-11c) — a tiny long-running query loop over a single
- * {@link AnalysisSession}. Unlike the one-shot subcommands (a fresh process, cold cache, per query),
- * the REPL keeps the session — and its Tier-2 edge cache — alive across queries, and drives a
- * {@link TreeScanSource} so an out-of-band edit is detected, re-indexed, and <b>cascaded</b> before
- * the next query serves an answer. This is the in-process model the MCP server (M2) will use; here it
- * makes the warm cache-hit + live node-diff cascade observable by hand (the task's manual check).
+ * {@code jcma repl <repo>} (M1 task-11c; time-boxed in task-12) — a tiny long-running query loop over a
+ * single {@link AnalysisSession}, served through a {@link QueryService}. Unlike the one-shot
+ * subcommands (a fresh process, cold cache, per query), the REPL keeps the session — and its Tier-2
+ * edge cache — alive across queries, and drives a {@link TreeScanSource} so an out-of-band edit is
+ * detected, re-indexed, and <b>cascaded</b> before the next query serves an answer. Each command takes
+ * an optional {@code --deadline <ms>} time-box (e.g. {@code refs Foo --deadline 50}), exercising
+ * cancellation against the warm cache by hand. This is the in-process model the MCP server (M2) uses.
  */
 final class Repl {
 
@@ -48,10 +51,10 @@ final class Repl {
         }
         Workspace workspace = Workspace.discover(repo);
         FreshnessSource source = new TreeScanSource(workspace.sourceRoots());
-        try (AnalysisSession session = AnalysisSession.open(indexDir, workspace, source, Metrics.noop());
+        try (QueryService svc = new QueryService(AnalysisSession.open(indexDir, workspace, source, Metrics.noop()));
                 BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
             out.println("jcma repl — commands: refs <symbol> | def <symbol> | def <file> <line:col> "
-                    + "| supertypes <symbol> | quit");
+                    + "| supertypes <symbol> | quit   (any query takes an optional --deadline <ms>)");
             prompt(out);
             String line;
             while ((line = in.readLine()) != null) {
@@ -60,10 +63,15 @@ final class Repl {
                     break;
                 }
                 if (!trimmed.isEmpty()) {
-                    try {
-                        dispatch(session, trimmed.split("\\s+"), out, err);
-                    } catch (Exception e) {
-                        err.println("jcma: " + e.getMessage());
+                    Deadline.Parsed parsed = Deadline.parse(trimmed.split("\\s+"));
+                    if (parsed.error() != null) {
+                        err.println(parsed.error());
+                    } else {
+                        try {
+                            dispatch(svc, parsed.positional(), parsed.deadline(), out, err);
+                        } catch (Exception e) {
+                            err.println("jcma: " + e.getMessage());
+                        }
                     }
                 }
                 prompt(out);
@@ -75,40 +83,43 @@ final class Repl {
         }
     }
 
-    private static void dispatch(AnalysisSession session, String[] cmd, PrintStream out, PrintStream err)
+    private static void dispatch(QueryService svc, String[] cmd, Duration deadline, PrintStream out, PrintStream err)
             throws Exception {
         switch (cmd[0]) {
             case "refs" -> {
                 if (cmd.length != 2) {
-                    err.println("usage: refs <symbol>");
+                    err.println("usage: refs <symbol> [--deadline <ms>]");
                     return;
                 }
-                forEachDeclaration(session, cmd[1], out, err, target -> printRefs(out, session.findReferences(target)));
+                forEachDeclaration(svc, cmd[1], deadline, out, err,
+                        target -> printRefs(out, svc.findReferences(target, deadline)));
             }
             case "supertypes" -> {
                 if (cmd.length != 2) {
-                    err.println("usage: supertypes <symbol>");
+                    err.println("usage: supertypes <symbol> [--deadline <ms>]");
                     return;
                 }
-                forEachDeclaration(session, cmd[1], out, err, target -> printHierarchy(out, session, target));
+                forEachDeclaration(svc, cmd[1], deadline, out, err,
+                        target -> printHierarchy(out, svc, target, deadline));
             }
             case "def" -> {
                 if (cmd.length == 2) {
-                    forEachDeclaration(session, cmd[1], out, err, target -> printDef(out, session.findDefinition(target)));
+                    forEachDeclaration(svc, cmd[1], deadline, out, err,
+                            target -> printDef(out, svc.findDefinition(target, deadline)));
                 } else if (cmd.length == 3) {
                     Position pos = parsePosition(cmd[2]);
                     if (pos == null) {
                         err.println("bad position '" + cmd[2] + "' — expected <line:col> (1-based)");
                         return;
                     }
-                    Optional<Definition> def = session.findDefinitionAt(Path.of(cmd[1]), pos);
+                    Optional<Definition> def = svc.findDefinitionAt(Path.of(cmd[1]), pos, deadline);
                     if (def.isEmpty()) {
                         err.println("unresolved at " + cmd[1] + ":" + cmd[2]);
                     } else {
                         printDef(out, def.get());
                     }
                 } else {
-                    err.println("usage: def <symbol>  |  def <file> <line:col>");
+                    err.println("usage: def <symbol>  |  def <file> <line:col>  [--deadline <ms>]");
                 }
             }
             default -> err.println("unknown command '" + cmd[0] + "' — try: refs | def | supertypes | quit");
@@ -116,9 +127,9 @@ final class Repl {
     }
 
     /** Resolve {@code symbol} to its declaration(s) and apply {@code action} to each; report if none. */
-    private static void forEachDeclaration(AnalysisSession session, String symbol, PrintStream out,
+    private static void forEachDeclaration(QueryService svc, String symbol, Duration deadline, PrintStream out,
             PrintStream err, ThrowingConsumer<Symbol> action) throws Exception {
-        List<Symbol> targets = session.declarations(symbol);
+        List<Symbol> targets = svc.declarations(symbol, deadline);
         if (targets.isEmpty()) {
             err.println("no declaration named '" + symbol + "' in the index");
             return;
@@ -144,15 +155,15 @@ final class Repl {
         }
     }
 
-    private static void printHierarchy(PrintStream out, AnalysisSession session, Symbol target)
-            throws java.io.IOException {
+    private static void printHierarchy(PrintStream out, QueryService svc, Symbol target, Duration deadline)
+            throws Exception {
         out.println("  supertypes (out):");
-        for (MonikerEdge e : session.supertypes(target)) {
-            out.printf("    %-11s %s%n", e.type().name().toLowerCase(), session.signatureOf(e.dst()));
+        for (MonikerEdge e : svc.supertypes(target, deadline)) {
+            out.printf("    %-11s %s%n", e.type().name().toLowerCase(), svc.signatureOf(e.dst()));
         }
         out.println("  subtypes / overriders (in):");
-        for (MonikerEdge e : session.subtypes(target)) {
-            out.printf("    %-11s %s%n", e.type().name().toLowerCase(), session.signatureOf(e.src()));
+        for (MonikerEdge e : svc.subtypes(target, deadline)) {
+            out.printf("    %-11s %s%n", e.type().name().toLowerCase(), svc.signatureOf(e.src()));
         }
     }
 

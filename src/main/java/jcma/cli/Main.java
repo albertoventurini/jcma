@@ -172,16 +172,20 @@ public final class Main {
                                        reports files / symbols / LOC-per-second
                   compact <indexDir>   fold the overlay into a fresh base
                   outline <file>       print a file's declaration containment tree
-                  refs <repo> <symbol>
+                  refs <repo> <symbol> [--deadline <ms>]
                                        find references (Tier-2 resolve-on-demand), grouped by
                                        enclosing symbol, with counts + the unconfirmed tail
-                  def <repo> <symbol>  |  def <repo> <file> <line:col>
+                  def <repo> <symbol>  |  def <repo> <file> <line:col>  [--deadline <ms>]
                                        find a definition by symbol name or by use-site position
-                  supertypes <repo> <symbol>
+                  supertypes <repo> <symbol> [--deadline <ms>]
                                        print a symbol's EXTENDS/IMPLEMENTS/OVERRIDES edges in both
                                        directions (supertypes out, subtypes/overriders in)
                   repl <repo>          long-running query loop over one live session (warm edge
-                                       cache + live node-diff cascade on out-of-band edits)
+                                       cache + live node-diff cascade on out-of-band edits);
+                                       each query takes an optional --deadline <ms>
+
+                  --deadline <ms>      time-box a query (e.g. 200, 200ms, 2s); on expiry the query
+                                       is cancelled and reported as timed out (no partial result)
                 """);
     }
 }

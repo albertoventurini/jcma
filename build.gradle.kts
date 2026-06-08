@@ -101,6 +101,12 @@ tasks.test {
     // The cross-jar engine test (and the -Pagent trace it feeds) resolves against a real fixture
     // jar; build it first. See the crossJarFixtureJar task below.
     dependsOn("crossJarFixtureJar")
+    // The opt-in corpus ITs (assumeTrue a local, git-ignored commons-lang corpus is present —
+    // EdgeResolverCommonsIT, QueryLatencyTest) resolve a 527-file project through JavaSymbolSolver,
+    // whose retained AST set overflows Gradle's default 512 MB test heap into a GC death-spiral.
+    // On a normal checkout the corpus is absent and these are skipped; give the JVM room so the
+    // corpus-present (local perf/recall) path runs instead of thrashing.
+    maxHeapSize = "2g"
 }
 
 graalvmNative {

@@ -3,6 +3,8 @@ package jcma.cli;
 import jcma.engine.Position;
 import jcma.index.Symbol;
 import jcma.obs.Metrics;
+import jcma.query.QueryService;
+import jcma.query.QueryTimeoutException;
 import jcma.resolve.Definition;
 import jcma.session.AnalysisSession;
 import jcma.workspace.Workspace;
@@ -11,60 +13,74 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * {@code jcma def <repo> <symbol>} | {@code jcma def <repo> <file> <line:col>} (task-10) — find-definition
- * in both PRD §6 input modes: by symbol (declaration lookup from the index) or by use-site position
- * (go-to-def, resolved through the engine). The index lives at {@code <repo>/.jcma}.
+ * {@code jcma def <repo> <symbol>} | {@code jcma def <repo> <file> <line:col>} {@code [--deadline <ms>]}
+ * (task-10; time-boxed in task-12) — find-definition in both PRD §6 input modes: by symbol (declaration
+ * lookup from the index) or by use-site position (go-to-def, resolved through the engine). Served
+ * through a {@link QueryService} under {@code --deadline}. The index lives at {@code <repo>/.jcma}.
  */
 final class Def {
 
     private Def() {}
 
     static int run(String[] args, PrintStream out, PrintStream err) {
-        if (args.length != 3 && args.length != 4) {
-            err.println("jcma: usage: jcma def <repo> <symbol>  |  jcma def <repo> <file> <line:col>");
+        Deadline.Parsed parsed = Deadline.parse(args);
+        if (parsed.error() != null) {
+            err.println("jcma: " + parsed.error());
             return 2;
         }
-        Path repo = Path.of(args[1]);
+        String[] a = parsed.positional();
+        if (a.length != 3 && a.length != 4) {
+            err.println("jcma: usage: jcma def <repo> <symbol>  |  jcma def <repo> <file> <line:col>"
+                    + "  [--deadline <ms>]");
+            return 2;
+        }
+        Path repo = Path.of(a[1]);
+        Duration deadline = parsed.deadline();
         Path indexDir = repo.resolve(".jcma");
         if (!Files.isDirectory(indexDir)) {
             err.println("jcma: no index at " + indexDir + " — run `jcma index " + repo + "` first");
             return 1;
         }
-        try (AnalysisSession session = AnalysisSession.open(indexDir, Workspace.discover(repo), Metrics.noop())) {
-            return args.length == 3
-                    ? bySymbol(session, args[2], out, err)
-                    : byPosition(session, args[2], args[3], out, err);
+        try (QueryService svc = new QueryService(
+                AnalysisSession.open(indexDir, Workspace.discover(repo), Metrics.noop()))) {
+            return a.length == 3
+                    ? bySymbol(svc, a[2], deadline, out, err)
+                    : byPosition(svc, a[2], a[3], deadline, out, err);
+        } catch (QueryTimeoutException te) {
+            err.println("jcma: " + te.getMessage());
+            return 1;
         } catch (Exception e) {
             err.println("jcma: def failed: " + e.getMessage());
             return 1;
         }
     }
 
-    private static int bySymbol(AnalysisSession session, String symbol, PrintStream out, PrintStream err)
-            throws IOException {
-        List<Symbol> targets = session.declarations(symbol);
+    private static int bySymbol(QueryService svc, String symbol, Duration deadline, PrintStream out, PrintStream err)
+            throws IOException, QueryTimeoutException {
+        List<Symbol> targets = svc.declarations(symbol, deadline);
         if (targets.isEmpty()) {
             err.println("jcma: no declaration named '" + symbol + "' in the index");
             return 1;
         }
         for (Symbol target : targets) {
-            print(out, session.findDefinition(target));
+            print(out, svc.findDefinition(target, deadline));
         }
         return 0;
     }
 
-    private static int byPosition(AnalysisSession session, String file, String posArg,
-            PrintStream out, PrintStream err) throws IOException {
+    private static int byPosition(QueryService svc, String file, String posArg, Duration deadline,
+            PrintStream out, PrintStream err) throws IOException, QueryTimeoutException {
         Position pos = parsePosition(posArg);
         if (pos == null) {
             err.println("jcma: bad position '" + posArg + "' — expected <line:col> (1-based)");
             return 2;
         }
-        Optional<Definition> def = session.findDefinitionAt(Path.of(file), pos);
+        Optional<Definition> def = svc.findDefinitionAt(Path.of(file), pos, deadline);
         if (def.isEmpty()) {
             err.println("jcma: unresolved at " + file + ":" + pos.line() + ":" + pos.col());
             return 1;

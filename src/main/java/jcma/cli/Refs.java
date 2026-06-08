@@ -2,6 +2,8 @@ package jcma.cli;
 
 import jcma.index.Symbol;
 import jcma.obs.Metrics;
+import jcma.query.QueryService;
+import jcma.query.QueryTimeoutException;
 import jcma.resolve.Ref;
 import jcma.resolve.ReferenceGroup;
 import jcma.resolve.References;
@@ -12,39 +14,53 @@ import jcma.workspace.Workspace;
 import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 
 /**
- * {@code jcma refs <repo> <symbol>} (task-10) — Tier-2 find-references: resolve-on-demand, then print
- * confirmed references <b>grouped by enclosing symbol</b> with counts, plus the mandatory
- * <b>unconfirmed tail</b>. The index lives at {@code <repo>/.jcma} (build it with {@code jcma index}).
+ * {@code jcma refs <repo> <symbol> [--deadline <ms>]} (task-10; time-boxed in task-12) — Tier-2
+ * find-references: resolve-on-demand, then print confirmed references <b>grouped by enclosing
+ * symbol</b> with counts, plus the mandatory <b>unconfirmed tail</b>. The query is served through a
+ * {@link QueryService} under {@code --deadline} (a clean timeout if exceeded). The index lives at
+ * {@code <repo>/.jcma} (build it with {@code jcma index}).
  */
 final class Refs {
 
     private Refs() {}
 
     static int run(String[] args, PrintStream out, PrintStream err) {
-        if (args.length != 3) {
-            err.println("jcma: usage: jcma refs <repo> <symbol>");
+        Deadline.Parsed parsed = Deadline.parse(args);
+        if (parsed.error() != null) {
+            err.println("jcma: " + parsed.error());
             return 2;
         }
-        Path repo = Path.of(args[1]);
-        String symbol = args[2];
+        String[] a = parsed.positional();
+        if (a.length != 3) {
+            err.println("jcma: usage: jcma refs <repo> <symbol> [--deadline <ms>]");
+            return 2;
+        }
+        Path repo = Path.of(a[1]);
+        String symbol = a[2];
+        Duration deadline = parsed.deadline();
         Path indexDir = repo.resolve(".jcma");
         if (!Files.isDirectory(indexDir)) {
             err.println("jcma: no index at " + indexDir + " — run `jcma index " + repo + "` first");
             return 1;
         }
-        try (AnalysisSession session = AnalysisSession.open(indexDir, Workspace.discover(repo), Metrics.noop())) {
-            List<Symbol> targets = session.declarations(symbol);
+        try (QueryService svc = new QueryService(
+                AnalysisSession.open(indexDir, Workspace.discover(repo), Metrics.noop()))) {
+            List<Symbol> targets = svc.declarations(symbol, deadline);
             if (targets.isEmpty()) {
                 err.println("jcma: no declaration named '" + symbol + "' in the index");
                 return 1;
             }
             for (Symbol target : targets) {
-                print(out, target, session.findReferences(target));
+                print(out, target, svc.findReferences(target, deadline));
             }
             return 0;
+        } catch (QueryTimeoutException te) {
+            err.println("jcma: " + te.getMessage());
+            return 1;
         } catch (Exception e) {
             err.println("jcma: refs failed: " + e.getMessage());
             return 1;

@@ -189,6 +189,11 @@ public final class EdgeResolver implements AutoCloseable {
             return;
         }
         for (int fid : usageIndex.candidateFiles(simpleName)) {
+            // Cooperative cancel checkpoint (task-12): the time-box interrupts this (single) worker
+            // thread; bail here — between files, never mid-applyEdit, so the store is never torn.
+            if (Thread.currentThread().isInterrupted()) {
+                throw new java.util.concurrent.CancellationException("find_references cancelled");
+            }
             if (!warmFiles.add(fid)) {
                 continue; // already resolved in this session
             }
