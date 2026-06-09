@@ -438,13 +438,14 @@ Option A — the rest is bookkeeping.
 ## Reproduction (manual, via the REPL)
 
 The corpus is git-ignored; this assumes it's present at
-`milestones/m0-spike/corpus/commons-lang` with an in-place `.jcma` index (`jcma index <repo>`).
+`milestones/m0-spike/corpus/commons-lang` with an index built by `jcma -C <corpus> index` (stored
+under `~/.cache/jcma`).
 
 ```bash
 ./gradlew -q installDist
 # cold find_references — the time-box makes the slowness visible immediately:
 printf 'refs getProperty --deadline 1500\nquit\n' \
-  | build/install/jcma/bin/jcma repl milestones/m0-spike/corpus/commons-lang
+  | build/install/jcma/bin/jcma -C milestones/m0-spike/corpus/commons-lang repl
 # → "jcma: query exceeded its deadline of 1500 ms"  (cold resolution of even 13 files blows 1.5 s)
 ```
 

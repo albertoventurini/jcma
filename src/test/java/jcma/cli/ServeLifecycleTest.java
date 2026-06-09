@@ -12,7 +12,9 @@ import java.io.InputStream;
 import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.stream.Stream;
+import jcma.workspace.IndexLayout;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -69,39 +71,59 @@ class ServeLifecycleTest {
     @Test
     void handshakeAloneNeverBuildsTheIndexButFirstToolCallDoes(@TempDir Path repo) throws IOException {
         copyTree(FIXTURE, repo);
-        Path indexDir = repo.resolve(".jcma");
+        Path indexDir = IndexLayout.defaultIndexDir(repo);
+        try {
+            // Run A: handshake only (initialize + tools/list, then EOF). No tool call → no index.
+            Run handshake = dispatch(INIT + "\n" + TOOLS_LIST + "\n", "serve", "-C", repo.toString());
+            assertEquals(0, handshake.exit(), handshake.err());
+            assertTrue(handshake.out().contains("2025-06-18"), "initialize answered: " + handshake.out());
+            assertTrue(handshake.out().contains("health"), "tools/list answered: " + handshake.out());
+            assertFalse(Files.isDirectory(indexDir), "the handshake must not build an index");
 
-        // Run A: handshake only (initialize + tools/list, then EOF). No tool call → no index.
-        Run handshake = dispatch(INIT + "\n" + TOOLS_LIST + "\n", "serve", repo.toString());
-        assertEquals(0, handshake.exit(), handshake.err());
-        assertTrue(handshake.out().contains("2025-06-18"), "initialize answered: " + handshake.out());
-        assertTrue(handshake.out().contains("health"), "tools/list answered: " + handshake.out());
-        assertFalse(Files.isDirectory(indexDir), "the handshake must not build an index");
-
-        // Run B: a tools/call lazily builds the index before answering.
-        Run call = dispatch(INIT + "\n" + CALL_HEALTH + "\n", "serve", repo.toString());
-        assertEquals(0, call.exit(), call.err());
-        assertTrue(Files.isDirectory(indexDir), "the first tools/call builds the index");
-        assertTrue(call.err().contains("indexing"), "a one-time stderr indexing note: " + call.err());
-        assertTrue(call.out().contains("\"isError\":false"), "the tool call returns a result: " + call.out());
+            // Run B: a tools/call lazily builds the index before answering.
+            Run call = dispatch(INIT + "\n" + CALL_HEALTH + "\n", "serve", "-C", repo.toString());
+            assertEquals(0, call.exit(), call.err());
+            assertTrue(Files.isDirectory(indexDir), "the first tools/call builds the index");
+            assertTrue(call.err().contains("indexing"), "a one-time stderr indexing note: " + call.err());
+            assertTrue(call.out().contains("\"isError\":false"), "the tool call returns a result: " + call.out());
+        } finally {
+            deleteRecursively(indexDir);
+        }
     }
 
     @Test
     void serveAgainstAnAlreadyIndexedRepoDoesNotRebuild(@TempDir Path repo) throws IOException {
         copyTree(FIXTURE, repo);
+        Path indexDir = IndexLayout.defaultIndexDir(repo);
+        try {
+            Run prebuild = dispatch("", "index", "-C", repo.toString());
+            assertEquals(0, prebuild.exit(), prebuild.err());
+            assertTrue(Files.isDirectory(indexDir), "pre-built index present");
 
-        Run prebuild = dispatch("", "index", repo.toString());
-        assertEquals(0, prebuild.exit(), prebuild.err());
-        assertTrue(Files.isDirectory(repo.resolve(".jcma")), "pre-built index present");
+            Run warm = dispatch(INIT + "\n" + CALL_HEALTH + "\n", "serve", "-C", repo.toString());
+            assertEquals(0, warm.exit(), warm.err());
+            assertTrue(warm.err().contains("up to date"), "a warm reconcile reports up-to-date: " + warm.err());
+            assertFalse(warm.err().contains("indexing"), "a warm repo is not re-indexed: " + warm.err());
+        } finally {
+            deleteRecursively(indexDir);
+        }
+    }
 
-        Run warm = dispatch(INIT + "\n" + CALL_HEALTH + "\n", "serve", repo.toString());
-        assertEquals(0, warm.exit(), warm.err());
-        assertTrue(warm.err().contains("up to date"), "a warm reconcile reports up-to-date: " + warm.err());
-        assertFalse(warm.err().contains("indexing"), "a warm repo is not re-indexed: " + warm.err());
+    /** Remove the default cache dir a serve/index run created so the test leaves no trace in ~/.cache. */
+    private static void deleteRecursively(Path dir) throws IOException {
+        if (!Files.exists(dir)) {
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(dir)) {
+            for (Path p : (Iterable<Path>) walk.sorted(Comparator.reverseOrder())::iterator) {
+                Files.deleteIfExists(p);
+            }
+        }
     }
 
     @Test
-    void usageWhenNoRepo() {
-        assertEquals(2, dispatch("", "serve").exit());
+    void usageWhenExtraArgs() {
+        // serve takes no positionals now (repo comes from the working dir); a stray arg is a usage error.
+        assertEquals(2, dispatch("", "serve", "x").exit());
     }
 }

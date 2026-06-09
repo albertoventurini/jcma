@@ -3,7 +3,7 @@ package jcma.resolve;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import jcma.cli.Main;
+import jcma.IndexFixture;
 import jcma.index.EdgeType;
 import jcma.index.LsmStore;
 import jcma.index.MonikerEdge;
@@ -11,8 +11,6 @@ import jcma.index.Symbol;
 import jcma.obs.Metrics;
 import jcma.workspace.Workspace;
 
-import java.io.OutputStream;
-import java.io.PrintStream;
 import java.nio.file.Path;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -83,8 +81,6 @@ class UnconfirmedEdgeTest {
     }
 
     private static void index(Path repo, Path indexDir) {
-        PrintStream sink = new PrintStream(OutputStream.nullOutputStream());
-        int code = Main.run(new String[] {"index", repo.toString(), indexDir.toString()}, sink, sink);
-        assertEquals(0, code, "jcma index should succeed");
+        IndexFixture.build(repo, indexDir);
     }
 }

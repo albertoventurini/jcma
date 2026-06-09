@@ -3,13 +3,11 @@ package jcma.resolve;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import jcma.cli.Main;
+import jcma.IndexFixture;
 import jcma.index.Symbol;
 import jcma.obs.Metrics;
 import jcma.workspace.Workspace;
 
-import java.io.OutputStream;
-import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
@@ -149,8 +147,6 @@ class EdgeResolverCommonsIT {
     }
 
     private static void index(Path repo, Path indexDir) {
-        PrintStream sink = new PrintStream(OutputStream.nullOutputStream());
-        int code = Main.run(new String[] {"index", repo.toString(), indexDir.toString()}, sink, sink);
-        assertTrue(code == 0, "jcma index should succeed");
+        IndexFixture.build(repo, indexDir);
     }
 }

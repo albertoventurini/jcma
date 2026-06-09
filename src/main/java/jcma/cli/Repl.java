@@ -12,6 +12,7 @@ import jcma.resolve.References;
 import jcma.resolve.UnconfirmedRef;
 import jcma.session.AnalysisSession;
 import jcma.workspace.FreshnessSource;
+import jcma.workspace.IndexLayout;
 import jcma.workspace.TreeScanSource;
 import jcma.workspace.Workspace;
 
@@ -29,7 +30,7 @@ import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 
 /**
- * {@code jcma repl <repo>} (M1 task-11c; time-boxed in task-12) — a tiny long-running query loop over a
+ * {@code jcma repl} (M1 task-11c; time-boxed in task-12) — a tiny long-running query loop over a
  * single {@link AnalysisSession}, served through a {@link QueryService}. Unlike the one-shot
  * subcommands (a fresh process, cold cache, per query), the REPL keeps the session — and its Tier-2
  * edge cache — alive across queries, and drives a {@link TreeScanSource} so an out-of-band edit is
@@ -41,15 +42,15 @@ final class Repl {
 
     private Repl() {}
 
-    static int run(String[] args, PrintStream out, PrintStream err) {
-        if (args.length != 2) {
-            err.println("jcma: usage: jcma repl <repo>");
+    static int run(Path cwd, String[] args, PrintStream out, PrintStream err) {
+        if (args.length != 1) {
+            err.println("jcma: usage: jcma repl");
             return 2;
         }
-        Path repo = Path.of(args[1]);
-        Path indexDir = repo.resolve(".jcma");
+        Path repo = Workspace.projectRoot(cwd);
+        Path indexDir = IndexLayout.defaultIndexDir(repo);
         if (!Files.isDirectory(indexDir)) {
-            err.println("jcma: no index at " + indexDir + " — run `jcma index " + repo + "` first");
+            err.println("jcma: no index for " + repo + " — run `jcma index` first");
             return 1;
         }
         Workspace workspace = Workspace.discover(repo);

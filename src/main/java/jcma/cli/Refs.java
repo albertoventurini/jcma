@@ -9,6 +9,7 @@ import jcma.resolve.ReferenceGroup;
 import jcma.resolve.References;
 import jcma.resolve.UnconfirmedRef;
 import jcma.session.AnalysisSession;
+import jcma.workspace.IndexLayout;
 import jcma.workspace.Workspace;
 
 import java.io.PrintStream;
@@ -18,33 +19,33 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * {@code jcma refs <repo> <symbol> [--deadline <ms>]} (task-10; time-boxed in task-12) — Tier-2
+ * {@code jcma refs <symbol> [--deadline <ms>]} (task-10; time-boxed in task-12) — Tier-2
  * find-references: resolve-on-demand, then print confirmed references <b>grouped by enclosing
  * symbol</b> with counts, plus the mandatory <b>unconfirmed tail</b>. The query is served through a
- * {@link QueryService} under {@code --deadline} (a clean timeout if exceeded). The index lives at
- * {@code <repo>/.jcma} (build it with {@code jcma index}).
+ * {@link QueryService} under {@code --deadline} (a clean timeout if exceeded). The index lives in
+ * the user cache (build it with {@code jcma index}).
  */
 final class Refs {
 
     private Refs() {}
 
-    static int run(String[] args, PrintStream out, PrintStream err) {
+    static int run(Path cwd, String[] args, PrintStream out, PrintStream err) {
         Deadline.Parsed parsed = Deadline.parse(args);
         if (parsed.error() != null) {
             err.println("jcma: " + parsed.error());
             return 2;
         }
         String[] a = parsed.positional();
-        if (a.length != 3) {
-            err.println("jcma: usage: jcma refs <repo> <symbol> [--deadline <ms>]");
+        if (a.length != 2) {
+            err.println("jcma: usage: jcma refs <symbol> [--deadline <ms>]");
             return 2;
         }
-        Path repo = Path.of(a[1]);
-        String symbol = a[2];
+        Path repo = Workspace.projectRoot(cwd);
+        String symbol = a[1];
         Duration deadline = parsed.deadline();
-        Path indexDir = repo.resolve(".jcma");
+        Path indexDir = IndexLayout.defaultIndexDir(repo);
         if (!Files.isDirectory(indexDir)) {
-            err.println("jcma: no index at " + indexDir + " — run `jcma index " + repo + "` first");
+            err.println("jcma: no index for " + repo + " — run `jcma index` first");
             return 1;
         }
         try (QueryService svc = new QueryService(

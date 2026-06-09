@@ -4,15 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import jcma.cli.Main;
+import jcma.IndexFixture;
 import jcma.index.Symbol;
 import jcma.obs.Metrics;
 import jcma.resolve.References;
 import jcma.session.AnalysisSession;
 import jcma.workspace.Workspace;
 
-import java.io.OutputStream;
-import java.io.PrintStream;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -79,8 +77,6 @@ class QueryServiceTest {
     }
 
     private static void index(Path repo, Path indexDir) {
-        PrintStream sink = new PrintStream(OutputStream.nullOutputStream());
-        assertEquals(0, Main.run(new String[] {"index", repo.toString(), indexDir.toString()}, sink, sink),
-                "jcma index should succeed");
+        IndexFixture.build(repo, indexDir);
     }
 }

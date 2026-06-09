@@ -11,6 +11,7 @@ import jcma.mcp.ToolRegistry;
 import jcma.obs.Metrics;
 import jcma.query.QueryService;
 import jcma.session.AnalysisSession;
+import jcma.workspace.IndexLayout;
 import jcma.workspace.Reconciler;
 import jcma.workspace.TreeScanSource;
 import jcma.workspace.Workspace;
@@ -23,7 +24,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * {@code jcma serve <repo>} (M2 task-2) — run the MCP (JSON-RPC over stdio) server, the in-process
+ * {@code jcma serve} (M2 task-2) — run the MCP (JSON-RPC over stdio) server for the repo inferred
+ * from the working directory, the in-process
  * session model of {@link Repl} generalized onto the wire (PRD §4: MCP is jcma's only surface). The
  * {@code initialize}/{@code tools/list} handshake answers instantly with no session; the index is
  * built <b>lazily</b>, synchronously, on the first {@code tools/call} (a one-time stderr note), then
@@ -40,17 +42,13 @@ final class Serve {
         QueryService svc;
     }
 
-    static int run(String[] args, PrintStream out, PrintStream err) {
-        if (args.length != 2) {
-            err.println("jcma: usage: jcma serve <repo>");
+    static int run(Path cwd, String[] args, PrintStream out, PrintStream err) {
+        if (args.length != 1) {
+            err.println("jcma: usage: jcma serve");
             return 2;
         }
-        Path repo = Path.of(args[1]);
-        if (!Files.isDirectory(repo)) {
-            err.println("jcma: not a directory: " + repo);
-            return 1;
-        }
-        Path indexDir = repo.resolve(".jcma");
+        Path repo = Workspace.projectRoot(cwd);
+        Path indexDir = IndexLayout.defaultIndexDir(repo);
         Workspace workspace = Workspace.discover(repo);
         Metrics metrics = Metrics.create();
 

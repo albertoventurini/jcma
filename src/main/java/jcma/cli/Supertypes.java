@@ -7,6 +7,7 @@ import jcma.obs.Metrics;
 import jcma.query.QueryService;
 import jcma.query.QueryTimeoutException;
 import jcma.session.AnalysisSession;
+import jcma.workspace.IndexLayout;
 import jcma.workspace.Workspace;
 
 import java.io.IOException;
@@ -17,7 +18,7 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * {@code jcma supertypes <repo> <symbol> [--deadline <ms>]} (task-11a debug aid; time-boxed in
+ * {@code jcma supertypes <symbol> [--deadline <ms>]} (task-11a debug aid; time-boxed in
  * task-12) — Tier-2 resolve-on-demand of the type hierarchy, then print a symbol's
  * {@code EXTENDS}/{@code IMPLEMENTS}/{@code OVERRIDES} edges in both directions: its <b>supertypes</b>
  * (out-edges) and its <b>subtypes / implementors / overriders</b> (in-edges, the {@code find_subtypes}
@@ -27,23 +28,23 @@ final class Supertypes {
 
     private Supertypes() {}
 
-    static int run(String[] args, PrintStream out, PrintStream err) {
+    static int run(Path cwd, String[] args, PrintStream out, PrintStream err) {
         Deadline.Parsed parsed = Deadline.parse(args);
         if (parsed.error() != null) {
             err.println("jcma: " + parsed.error());
             return 2;
         }
         String[] a = parsed.positional();
-        if (a.length != 3) {
-            err.println("jcma: usage: jcma supertypes <repo> <symbol> [--deadline <ms>]");
+        if (a.length != 2) {
+            err.println("jcma: usage: jcma supertypes <symbol> [--deadline <ms>]");
             return 2;
         }
-        Path repo = Path.of(a[1]);
-        String symbol = a[2];
+        Path repo = Workspace.projectRoot(cwd);
+        String symbol = a[1];
         Duration deadline = parsed.deadline();
-        Path indexDir = repo.resolve(".jcma");
+        Path indexDir = IndexLayout.defaultIndexDir(repo);
         if (!Files.isDirectory(indexDir)) {
-            err.println("jcma: no index at " + indexDir + " — run `jcma index " + repo + "` first");
+            err.println("jcma: no index for " + repo + " — run `jcma index` first");
             return 1;
         }
         try (QueryService svc = new QueryService(

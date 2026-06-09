@@ -3,13 +3,11 @@ package jcma.resolve;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import jcma.cli.Main;
+import jcma.IndexFixture;
 import jcma.index.Symbol;
 import jcma.obs.Metrics;
 import jcma.workspace.Workspace;
 
-import java.io.OutputStream;
-import java.io.PrintStream;
 import java.nio.file.Path;
 import java.util.concurrent.CancellationException;
 import org.junit.jupiter.api.Test;
@@ -50,8 +48,6 @@ class EdgeResolverCancellationTest {
     }
 
     private static void index(Path repo, Path indexDir) {
-        PrintStream sink = new PrintStream(OutputStream.nullOutputStream());
-        assertEquals(0, Main.run(new String[] {"index", repo.toString(), indexDir.toString()}, sink, sink),
-                "jcma index should succeed");
+        IndexFixture.build(repo, indexDir);
     }
 }

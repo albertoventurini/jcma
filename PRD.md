@@ -195,6 +195,15 @@ live in the mmap'd file and the OS page cache holds only the working set → **R
 you touch, not index size**, and warm startup is "mmap + go" (no deserialization → serves the
 sub-100ms target).
 
+### Store location — user cache, not in-repo
+The index lives **outside the repo**, under a per-user cache: `${XDG_CACHE_HOME:-$HOME/.cache}/jcma/index/<repo-name>-<hash>`,
+where `<hash>` is over the repo's canonical absolute path (disambiguates same-named repos). This is
+how IntelliJ keeps project caches under its system dir, and for the same reasons: an in-repo
+`.jcma/` dir would need gitignoring **and** gets crawled by IDE indexers, leaking jcma's internal
+segments into IDE search. It also colocates with the existing JDK-signature cache
+(`~/.cache/jcma/jdk-*.jar`). `jcma index` still accepts an explicit `[indexDir]` override; the
+resolver is `jcma.workspace.IndexLayout`.
+
 ### Lazy-resolve-and-cache — reverse edges are a *byproduct* of forward resolution
 The unit of resolution is a **file's occurrences, not a symbol** — so we never do a
 per-symbol whole-repo scan for incoming edges. Resolving one use-site U→D yields **both**

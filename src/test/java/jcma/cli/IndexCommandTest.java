@@ -1,20 +1,27 @@
 package jcma.cli;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.stream.Stream;
+import jcma.workspace.IndexLayout;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Task 06 · P4 — {@code jcma index <repo> [indexDir]}, the cold full-index command, through the same
- * {@code Main.run} dispatch the native binary uses. Indexes a controlled package, then verifies the
- * persisted index is queryable by {@code search} and {@code stats} (PRD §10 M1 verification).
+ * Task 06 · P4 — {@code jcma index [indexDir]}, the cold full-index command, through the same
+ * {@code Main.run} dispatch the native binary uses. The repo is inferred from the working directory
+ * ({@code -C <repo>} here); fixtures are copied into a {@code @TempDir} so the working-dir→project-root
+ * walk-up can't escape into jcma's own Gradle project. The persisted index is then verified queryable
+ * by {@code search} and {@code stats} (PRD §10 M1 verification).
  */
 class IndexCommandTest {
 
@@ -32,8 +39,9 @@ class IndexCommandTest {
     }
 
     @Test
-    void indexBuildsAQueryablePersistedIndex(@TempDir Path indexDir) {
-        Run idx = dispatch("index", REPO.toString(), indexDir.toString());
+    void indexBuildsAQueryablePersistedIndex(@TempDir Path repo, @TempDir Path indexDir) throws IOException {
+        copyTree(REPO, repo);
+        Run idx = dispatch("index", "-C", repo.toString(), indexDir.toString());
         assertEquals(0, idx.exit(), "index should exit 0: " + idx.out() + idx.err());
         assertTrue(idx.out().contains("symbols"), "reports a symbol count: " + idx.out());
 
@@ -48,20 +56,27 @@ class IndexCommandTest {
     }
 
     @Test
-    void indexDefaultsToDotJcmaUnderTheRepo(@TempDir Path repoCopy) throws Exception {
-        // Copy the fixture into a temp repo so the default <repo>/.jcma index dir lands in temp.
-        Files.createDirectories(repoCopy.resolve("com/example"));
-        Files.copy(REPO.resolve("com/example/shapes/Shape.java"),
-                repoCopy.resolve("Shape.java"));
-        Run idx = dispatch("index", repoCopy.toString());
-        assertEquals(0, idx.exit(), idx.err());
-        assertTrue(Files.isDirectory(repoCopy.resolve(".jcma")), "default index dir <repo>/.jcma created");
+    void indexDefaultsToTheUserCacheNotTheRepo(@TempDir Path repoCopy) throws IOException {
+        Files.copy(REPO.resolve("com/example/shapes/Shape.java"), repoCopy.resolve("Shape.java"));
+        // The default index lives under the user cache, keyed by the (temp) repo path — never in-repo.
+        Path defaultIndex = IndexLayout.defaultIndexDir(repoCopy);
+        try {
+            Run idx = dispatch("index", "-C", repoCopy.toString());
+            assertEquals(0, idx.exit(), idx.err());
+            assertTrue(Files.isDirectory(defaultIndex),
+                    "default index dir created under the user cache: " + defaultIndex);
+            assertFalse(Files.exists(repoCopy.resolve(".jcma")),
+                    "the repo is left clean — no in-repo .jcma dir to gitignore or get IDE-indexed");
+        } finally {
+            deleteRecursively(defaultIndex);
+        }
     }
 
     @Test
-    void indexesTestSourcesAndTagsThem(@TempDir Path indexDir) {
+    void indexesTestSourcesAndTagsThem(@TempDir Path repo, @TempDir Path indexDir) throws IOException {
         // ws-with-tests has src/main/java/com/example/Greeter.java + src/test/java/.../GreeterTest.java.
-        Run idx = dispatch("index", ENGINE.resolve("ws-with-tests").toString(), indexDir.toString());
+        copyTree(ENGINE.resolve("ws-with-tests"), repo);
+        Run idx = dispatch("index", "-C", repo.toString(), indexDir.toString());
         assertEquals(0, idx.exit(), "index should exit 0: " + idx.out() + idx.err());
 
         Run search = dispatch("search", indexDir.toString(), "Greeter");
@@ -73,9 +88,10 @@ class IndexCommandTest {
     }
 
     @Test
-    void adHocLayoutFallsBackToAllMain(@TempDir Path indexDir) {
+    void adHocLayoutFallsBackToAllMain(@TempDir Path repo, @TempDir Path indexDir) throws IOException {
         // ws-adhoc has a loose Loose.java with no pom and no standard layout → repo-root, all MAIN.
-        Run idx = dispatch("index", ENGINE.resolve("ws-adhoc").toString(), indexDir.toString());
+        copyTree(ENGINE.resolve("ws-adhoc"), repo);
+        Run idx = dispatch("index", "-C", repo.toString(), indexDir.toString());
         assertEquals(0, idx.exit(), "index should exit 0: " + idx.out() + idx.err());
 
         Run search = dispatch("search", indexDir.toString(), "Loose");
@@ -85,7 +101,7 @@ class IndexCommandTest {
     }
 
     @Test
-    void warmReopenReportsZeroReparsedThenOneAfterAnEdit(@TempDir Path repo) throws Exception {
+    void warmReopenReportsZeroReparsedThenOneAfterAnEdit(@TempDir Path repo) throws IOException {
         // Task 08 manual check: index twice (second is warm, 0 reparsed); edit one file → 1 reparsed.
         Path src = repo.resolve("src/main/java/com/example");
         Files.createDirectories(src);
@@ -93,23 +109,50 @@ class IndexCommandTest {
         Files.writeString(foo, "package com.example;\npublic class Foo { public void f() {} }\n");
         Path indexDir = repo.resolve(".jcma");
 
-        Run first = dispatch("index", repo.toString(), indexDir.toString());
+        Run first = dispatch("index", "-C", repo.toString(), indexDir.toString());
         assertEquals(0, first.exit(), first.err());
 
-        Run second = dispatch("index", repo.toString(), indexDir.toString());
+        Run second = dispatch("index", "-C", repo.toString(), indexDir.toString());
         assertEquals(0, second.exit(), second.err());
         assertTrue(second.out().contains("0 reparsed"),
                 "an unchanged warm reopen reports 0 reparsed: " + second.out());
 
         // Add a method (changes the file's size) → exactly one file re-parsed.
         Files.writeString(foo, "package com.example;\npublic class Foo { public void f() {} public void g() {} }\n");
-        Run third = dispatch("index", repo.toString(), indexDir.toString());
+        Run third = dispatch("index", "-C", repo.toString(), indexDir.toString());
         assertEquals(0, third.exit(), third.err());
         assertTrue(third.out().contains("1 reparsed"), "one edit → 1 reparsed: " + third.out());
     }
 
     @Test
-    void usageWhenNoRepo() {
-        assertEquals(2, dispatch("index").exit());
+    void usageWhenTooManyArgs() {
+        // index now takes at most [indexDir]; a second positional is a usage error.
+        assertEquals(2, dispatch("index", "a", "b").exit());
+    }
+
+    private static void copyTree(Path src, Path dst) throws IOException {
+        try (Stream<Path> walk = Files.walk(src)) {
+            for (Path p : (Iterable<Path>) walk::iterator) {
+                Path target = dst.resolve(src.relativize(p).toString());
+                if (Files.isDirectory(p)) {
+                    Files.createDirectories(target);
+                } else {
+                    Files.createDirectories(target.getParent());
+                    Files.copy(p, target);
+                }
+            }
+        }
+    }
+
+    /** Remove a cache dir created by a default-location test so the run leaves no trace in ~/.cache. */
+    private static void deleteRecursively(Path dir) throws IOException {
+        if (!Files.exists(dir)) {
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(dir)) {
+            for (Path p : (Iterable<Path>) walk.sorted(Comparator.reverseOrder())::iterator) {
+                Files.deleteIfExists(p);
+            }
+        }
     }
 }

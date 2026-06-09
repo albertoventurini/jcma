@@ -33,11 +33,19 @@ public final class Main {
      * exit code (0 ok, 2 usage error, 1 subcommand failure).
      */
     public static int run(String[] args, PrintStream out, PrintStream err) {
-        if (args.length == 0) {
+        // Strip the global -C <dir> override (may appear anywhere); default working dir = process CWD.
+        GlobalArgs.Parsed g = GlobalArgs.parse(args);
+        if (g.error() != null) {
+            err.println("jcma: " + g.error());
+            return 2;
+        }
+        String[] a = g.rest();
+        if (a.length == 0) {
             usage(err);
             return 2;
         }
-        String cmd = args[0];
+        Path cwd = g.workingDir();
+        String cmd = a[0];
         switch (cmd) {
             case "version", "--version", "-v" -> {
                 out.println("jcma " + VERSION);
@@ -47,40 +55,41 @@ public final class Main {
                 return SelfTest.run(out);
             }
             case "resolve" -> {
-                return resolve(args, out, err);
+                return resolve(a, out, err);
             }
             case "index-dump" -> {
-                return IndexDump.run(args, out, err);
+                return IndexDump.run(a, out, err);
             }
             case "search" -> {
-                return Search.run(args, out, err);
+                return Search.run(a, out, err);
             }
             case "stats" -> {
-                return Stats.run(args, out, err);
+                return Stats.run(a, out, err);
             }
+            // Repo-oriented commands: the repo is inferred from the working dir (cwd), not a positional.
             case "index" -> {
-                return Index.run(args, out, err);
+                return Index.run(cwd, a, out, err);
             }
             case "compact" -> {
-                return Compact.run(args, out, err);
+                return Compact.run(a, out, err);
             }
             case "outline" -> {
-                return Outline.run(args, out, err);
+                return Outline.run(a, out, err);
             }
             case "refs" -> {
-                return Refs.run(args, out, err);
+                return Refs.run(cwd, a, out, err);
             }
             case "def" -> {
-                return Def.run(args, out, err);
+                return Def.run(cwd, a, out, err);
             }
             case "supertypes" -> {
-                return Supertypes.run(args, out, err);
+                return Supertypes.run(cwd, a, out, err);
             }
             case "repl" -> {
-                return Repl.run(args, out, err);
+                return Repl.run(cwd, a, out, err);
             }
             case "serve" -> {
-                return Serve.run(args, out, err);
+                return Serve.run(cwd, a, out, err);
             }
             default -> {
                 err.println("jcma: unknown subcommand '" + cmd + "'");
@@ -153,7 +162,10 @@ public final class Main {
 
     private static void usage(PrintStream err) {
         err.println("""
-                usage: jcma <subcommand> [args]
+                usage: jcma [-C <dir>] <subcommand> [args]
+
+                The repo is inferred from the working directory (walked up to the project root);
+                -C <dir> overrides it. The index lives under ~/.cache/jcma, keyed per repo.
 
                 subcommands:
                   version              print the jcma version
@@ -170,25 +182,26 @@ public final class Main {
                                        (case-sensitive), read from the trigram index
                   stats <indexDir>     base/overlay sizes, overlay-file count, and the
                                        overlay/base ratio the compaction policy reasons about
-                  index <repo> [indexDir]
-                                       cold full index of a repo (defaults to <repo>/.jcma);
+                  index [indexDir]     cold full index of the current repo (defaults to its
+                                       per-repo dir under ~/.cache/jcma);
                                        reports files / symbols / LOC-per-second
                   compact <indexDir>   fold the overlay into a fresh base
                   outline <file>       print a file's declaration containment tree
-                  refs <repo> <symbol> [--deadline <ms>]
+                  refs <symbol> [--deadline <ms>]
                                        find references (Tier-2 resolve-on-demand), grouped by
                                        enclosing symbol, with counts + the unconfirmed tail
-                  def <repo> <symbol>  |  def <repo> <file> <line:col>  [--deadline <ms>]
+                  def <symbol>  |  def <file> <line:col>  [--deadline <ms>]
                                        find a definition by symbol name or by use-site position
-                  supertypes <repo> <symbol> [--deadline <ms>]
+                  supertypes <symbol> [--deadline <ms>]
                                        print a symbol's EXTENDS/IMPLEMENTS/OVERRIDES edges in both
                                        directions (supertypes out, subtypes/overriders in)
-                  repl <repo>          long-running query loop over one live session (warm edge
+                  repl                 long-running query loop over one live session (warm edge
                                        cache + live node-diff cascade on out-of-band edits);
                                        each query takes an optional --deadline <ms>
-                  serve <repo>         run the MCP (JSON-RPC over stdio) server; the handshake
+                  serve                run the MCP (JSON-RPC over stdio) server; the handshake
                                        answers instantly, the index is built on the first tool call
 
+                  -C <dir>             act on the project at <dir> instead of the working directory
                   --deadline <ms>      time-box a query (e.g. 200, 200ms, 2s); on expiry the query
                                        is cancelled and reported as timed out (no partial result)
                 """);

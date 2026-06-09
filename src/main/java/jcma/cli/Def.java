@@ -7,6 +7,7 @@ import jcma.query.QueryService;
 import jcma.query.QueryTimeoutException;
 import jcma.resolve.Definition;
 import jcma.session.AnalysisSession;
+import jcma.workspace.IndexLayout;
 import jcma.workspace.Workspace;
 
 import java.io.IOException;
@@ -18,39 +19,39 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * {@code jcma def <repo> <symbol>} | {@code jcma def <repo> <file> <line:col>} {@code [--deadline <ms>]}
+ * {@code jcma def <symbol>} | {@code jcma def <file> <line:col>} {@code [--deadline <ms>]}
  * (task-10; time-boxed in task-12) — find-definition in both PRD §6 input modes: by symbol (declaration
  * lookup from the index) or by use-site position (go-to-def, resolved through the engine). Served
- * through a {@link QueryService} under {@code --deadline}. The index lives at {@code <repo>/.jcma}.
+ * through a {@link QueryService} under {@code --deadline}. The index lives in the user cache.
  */
 final class Def {
 
     private Def() {}
 
-    static int run(String[] args, PrintStream out, PrintStream err) {
+    static int run(Path cwd, String[] args, PrintStream out, PrintStream err) {
         Deadline.Parsed parsed = Deadline.parse(args);
         if (parsed.error() != null) {
             err.println("jcma: " + parsed.error());
             return 2;
         }
         String[] a = parsed.positional();
-        if (a.length != 3 && a.length != 4) {
-            err.println("jcma: usage: jcma def <repo> <symbol>  |  jcma def <repo> <file> <line:col>"
+        if (a.length != 2 && a.length != 3) {
+            err.println("jcma: usage: jcma def <symbol>  |  jcma def <file> <line:col>"
                     + "  [--deadline <ms>]");
             return 2;
         }
-        Path repo = Path.of(a[1]);
+        Path repo = Workspace.projectRoot(cwd);
         Duration deadline = parsed.deadline();
-        Path indexDir = repo.resolve(".jcma");
+        Path indexDir = IndexLayout.defaultIndexDir(repo);
         if (!Files.isDirectory(indexDir)) {
-            err.println("jcma: no index at " + indexDir + " — run `jcma index " + repo + "` first");
+            err.println("jcma: no index for " + repo + " — run `jcma index` first");
             return 1;
         }
         try (QueryService svc = new QueryService(
                 AnalysisSession.open(indexDir, Workspace.discover(repo), Metrics.noop()))) {
-            return a.length == 3
-                    ? bySymbol(svc, a[2], deadline, out, err)
-                    : byPosition(svc, a[2], a[3], deadline, out, err);
+            return a.length == 2
+                    ? bySymbol(svc, a[1], deadline, out, err)
+                    : byPosition(svc, a[1], a[2], deadline, out, err);
         } catch (QueryTimeoutException te) {
             err.println("jcma: " + te.getMessage());
             return 1;

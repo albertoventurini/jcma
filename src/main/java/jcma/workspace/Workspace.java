@@ -130,6 +130,24 @@ public final class Workspace {
     }
 
     /**
+     * Resolve the project root for {@code start} (a directory or a file): the nearest ancestor with a
+     * build marker ({@code pom.xml} or a Gradle root), else — when nothing upward looks like a
+     * project — {@code start}'s own directory. This is what lets the CLI infer the repo from the
+     * working directory: any subdir resolves to the same root, so the cache index is keyed
+     * consistently ({@link jcma.cli} commands key {@code IndexLayout.defaultIndexDir} off this).
+     */
+    public static Path projectRoot(Path start) {
+        Path s = start.toAbsolutePath().normalize();
+        Path dir = Files.isDirectory(s) ? s : s.getParent();
+        for (Path p = dir; p != null; p = p.getParent()) {
+            if (isProjectRoot(p)) {
+                return p;
+            }
+        }
+        return dir != null ? dir : s;
+    }
+
+    /**
      * The source root for a {@code .java} file, derived from its {@code package} declaration: a file
      * declaring {@code package a.b.c} sitting at {@code …/a/b/c/File.java} has source root the dir
      * three levels above. A file in the default package (or unreadable) → its own directory.

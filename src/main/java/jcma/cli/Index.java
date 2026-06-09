@@ -7,6 +7,7 @@ import jcma.index.SourceRoot;
 import jcma.index.SourceSet;
 import jcma.obs.Metrics;
 import jcma.obs.Timer;
+import jcma.workspace.IndexLayout;
 import jcma.workspace.Reconciler;
 import jcma.workspace.Workspace;
 
@@ -17,26 +18,23 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * {@code jcma index <repo> [<indexDir>]} (task-06 P4) — cold full index of a repo: discover source
- * roots, parse-only extract across virtual threads, persist through the LSM store, compact, and
- * report throughput. {@code indexDir} defaults to {@code <repo>/.jcma}. The same {@code Main.run}
- * dispatch runs under native-image.
+ * {@code jcma index [<indexDir>]} (task-06 P4) — cold full index of the repo inferred from the
+ * working directory: discover source roots, parse-only extract across virtual threads, persist
+ * through the LSM store, compact, and report throughput. {@code indexDir} defaults to a per-repo dir
+ * under the user cache ({@link IndexLayout#defaultIndexDir}). The same {@code Main.run} dispatch runs
+ * under native-image.
  */
 final class Index {
 
     private Index() {}
 
-    static int run(String[] args, PrintStream out, PrintStream err) {
-        if (args.length < 2 || args.length > 3) {
-            err.println("jcma: usage: jcma index <repo> [indexDir]");
+    static int run(Path cwd, String[] args, PrintStream out, PrintStream err) {
+        if (args.length > 2) {
+            err.println("jcma: usage: jcma index [indexDir]");
             return 2;
         }
-        Path repo = Path.of(args[1]);
-        if (!Files.isDirectory(repo)) {
-            err.println("jcma: not a directory: " + repo);
-            return 1;
-        }
-        Path indexDir = args.length == 3 ? Path.of(args[2]) : repo.resolve(".jcma");
+        Path repo = Workspace.projectRoot(cwd);
+        Path indexDir = args.length == 2 ? Path.of(args[1]) : IndexLayout.defaultIndexDir(repo);
 
         // Tagged source roots (main + test) from the workspace; fall back to the repo itself as MAIN.
         List<SourceRoot> roots = new ArrayList<>();

@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import jcma.cli.Main;
+import jcma.IndexFixture;
 import jcma.index.Symbol;
 import jcma.obs.Metrics;
 import jcma.resolve.ReferenceGroup;
@@ -15,8 +15,6 @@ import jcma.workspace.TreeScanSource;
 import jcma.workspace.Workspace;
 
 import java.io.IOException;
-import java.io.OutputStream;
-import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
@@ -61,9 +59,7 @@ class CascadeTest {
 
     private static Path index(Path repo) {
         Path indexDir = repo.resolve(".jcma");
-        PrintStream sink = new PrintStream(OutputStream.nullOutputStream());
-        assertEquals(0, Main.run(new String[] {"index", repo.toString(), indexDir.toString()}, sink, sink),
-                "jcma index should succeed");
+        IndexFixture.build(repo, indexDir);
         return indexDir;
     }
 

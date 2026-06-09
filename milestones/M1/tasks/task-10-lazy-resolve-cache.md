@@ -61,8 +61,8 @@ Implemented graph-native (not an in-memory side cache), per the design discussio
   neutral `ResolveFailure` (throwable + context flags), `resolve/FailureClassifier` maps it to a
   `Cause` (keeps JavaParser behind the §4 seam). All 7 categories resolved; `find_definition`
   supports both PRD §6 modes.
-- **CLI:** `jcma refs <repo> <symbol>` and `jcma def <repo> <symbol>|<file> <line:col>` (the index is
-  `<repo>/.jcma`).
+- **CLI:** `jcma refs <repo> <symbol>` and `jcma def <repo> <symbol>|<file> <line:col>` (the index
+  lives under `~/.cache/jcma`, resolved by `IndexLayout`; PRD §5.1).
 - **Deferred to task-11:** incremental usage-index maintenance (currently a full rebuild on any
   reconcile change); cross-restart re-resolve avoidance (the warm-set is in-session) folds into
   validate-on-read. **Not done:** the `trigrams.seg → symbol-names.seg` rename (kept `trigrams.seg`).

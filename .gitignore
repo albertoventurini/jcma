@@ -14,7 +14,8 @@ milestones/m0-spike/corpus/
 # M0 spike: generated Spike A artifacts (coverage/histogram/worksheets)
 milestones/m0-spike/out/
 
-# Index output (default <repo>/.jcma store written by `jcma index`)
+# Index output. The default store now lives under ~/.cache/jcma (PRD §5.1); this is only a safety
+# net for anyone who passes an explicit `jcma index <repo> .jcma`.
 .jcma/
 
 # Auto-generated classpath cache (machine-specific absolute paths; written by Workspace

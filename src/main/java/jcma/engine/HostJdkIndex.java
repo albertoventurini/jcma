@@ -144,11 +144,7 @@ public final class HostJdkIndex {
 
     /** {@code ${XDG_CACHE_HOME:-$HOME/.cache}/jcma}. */
     private static Path cacheDir() {
-        String xdg = System.getenv("XDG_CACHE_HOME");
-        Path base = (xdg != null && !xdg.isBlank())
-                ? Path.of(xdg)
-                : Path.of(System.getProperty("user.home"), ".cache");
-        return base.resolve("jcma");
+        return jcma.workspace.IndexLayout.cacheRoot();
     }
 
     private static Optional<Path> debugEmpty(String reason) {

@@ -4,14 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import jcma.cli.Main;
+import jcma.IndexFixture;
 import jcma.index.Symbol;
 import jcma.obs.Metrics;
 import jcma.session.AnalysisSession;
 import jcma.workspace.Workspace;
 
-import java.io.OutputStream;
-import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -41,9 +39,7 @@ class QueryLatencyTest {
     @BeforeAll
     static void indexCorpusOnce() {
         if (Files.isDirectory(CORPUS)) {
-            PrintStream sink = new PrintStream(OutputStream.nullOutputStream());
-            assertEquals(0, Main.run(new String[] {"index", CORPUS.toString(), indexDir.toString()}, sink, sink),
-                    "jcma index should succeed");
+            IndexFixture.build(CORPUS, indexDir);
         }
     }
 
