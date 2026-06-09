@@ -55,8 +55,17 @@ final class Refs {
                 err.println("jcma: no declaration named '" + symbol + "' in the index");
                 return 1;
             }
+            References shared = null;
             for (Symbol target : targets) {
-                print(out, target, svc.findReferences(target, deadline));
+                References refs = svc.findReferences(target, deadline);
+                printConfirmed(out, target, refs);
+                shared = refs;
+            }
+            // The unconfirmed tail is keyed by the query's simple name (every miss on that name
+            // coalesces onto one placeholder node), so it is identical for every same-named declaration
+            // — e.g. a type and its constructor. Print it once for the query, not once per declaration.
+            if (shared != null && shared.hasUnconfirmedTail()) {
+                printUnconfirmed(out, shared);
             }
             return 0;
         } catch (QueryTimeoutException te) {
@@ -68,7 +77,7 @@ final class Refs {
         }
     }
 
-    private static void print(PrintStream out, Symbol target, References refs) {
+    private static void printConfirmed(PrintStream out, Symbol target, References refs) {
         out.printf("%nreferences to %s  [%s]%n", display(target), target.moniker());
         out.printf("  %d reference(s) in %d enclosing symbol(s)%n", refs.totalRefs(), refs.groups().size());
         for (ReferenceGroup g : refs.groups()) {
@@ -77,13 +86,15 @@ final class Refs {
                 out.printf("    %s:%d  %s%n", r.file().getFileName(), r.range().startLine(), r.snippet());
             }
         }
-        if (refs.hasUnconfirmedTail()) {
-            out.printf("  unconfirmed (%d) — could not be resolved, so this set is not exhaustive:%n",
-                    refs.unconfirmed().size());
-            for (UnconfirmedRef u : refs.unconfirmed()) {
-                out.printf("    %s:%d  %s  [%s]%n",
-                        u.file().getFileName(), u.range().startLine(), u.snippet(), u.cause());
-            }
+    }
+
+    /** The query-wide unconfirmed tail (name-keyed; printed once, after every declaration's confirmed set). */
+    private static void printUnconfirmed(PrintStream out, References refs) {
+        out.printf("%nunconfirmed (%d) — could not be resolved, so this set is not exhaustive:%n",
+                refs.unconfirmed().size());
+        for (UnconfirmedRef u : refs.unconfirmed()) {
+            out.printf("    %s:%d  %s  [%s]%n",
+                    u.file().getFileName(), u.range().startLine(), u.snippet(), u.cause());
         }
     }
 

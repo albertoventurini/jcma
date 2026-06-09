@@ -34,6 +34,7 @@ import com.github.javaparser.resolution.model.SymbolReference;
 import com.github.javaparser.resolution.types.ResolvedReferenceType;
 import com.github.javaparser.symbolsolver.JavaSymbolSolver;
 import com.github.javaparser.symbolsolver.javaparsermodel.JavaParserFacade;
+import com.github.javaparser.symbolsolver.javaparsermodel.JavaParserFactory;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.CombinedTypeSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.JarTypeSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.JavaParserTypeSolver;
@@ -71,6 +72,10 @@ public final class JavaParserEngine implements AnalysisEngine {
     private final List<TypeSolver> jarSolvers;
     private final List<Path> sourceRoots;
     private volatile JavaParser parser;
+    // The CombinedTypeSolver backing the current parser, retained so attempt() can solve a name as a
+    // *type* in its AST context (the static-qualifier fallback). Rebuilt in lockstep with parser on
+    // refresh() — always the same solver the parser's SymbolResolver uses.
+    private volatile TypeSolver typeSolver;
 
     // The source-root JavaParserTypeSolvers' own parser config. Built once and reused across every
     // refresh() (unlike the engine parser's config, which rebinds its SymbolResolver to each rebuild's
@@ -150,6 +155,7 @@ public final class JavaParserEngine implements AnalysisEngine {
         ParserConfiguration config = new ParserConfiguration()
                 .setLanguageLevel(LanguageLevel.RAW)
                 .setSymbolResolver(new JavaSymbolSolver(solver));
+        this.typeSolver = solver; // retained for attempt()'s name-as-type fallback (same solver as above)
         return new JavaParser(config);
     }
 
@@ -250,25 +256,67 @@ public final class JavaParserEngine implements AnalysisEngine {
     /** Resolve one enumerated use-site; never throws (guards {@code Throwable}, incl. StackOverflow). */
     private ResolvedOccurrence attempt(Occurrences.Occ o) {
         try {
-            Object resolved = switch (o.kind()) {
-                case CALL          -> ((MethodCallExpr) o.node()).resolve();
-                case INSTANTIATION -> ((ObjectCreationExpr) o.node()).resolve();
-                case NAME          -> ((NameExpr) o.node()).resolve();
-                case FIELD_ACCESS  -> ((FieldAccessExpr) o.node()).resolve();
-                case METHOD_REF    -> ((MethodReferenceExpr) o.node()).resolve();
-                case TYPE_REF      -> ((ClassOrInterfaceType) o.node()).resolve();
-                case ANNOTATION    -> ((AnnotationExpr) o.node()).resolve();
-            };
-            ResolvedTarget target = describe(resolved);
-            return new ResolvedOccurrence(o.kind(), o.targetName(),
-                    o.startLine(), o.startCol(), o.endLine(), o.endCol(), target, null);
+            // NAME is the one syntactically *ambiguous* use-site (JLS §6.5): resolved as an ambiguous
+            // name — a value, else a type — by decision. Every other kind denotes one committed thing.
+            ResolvedTarget target = o.kind() == OccurrenceKind.NAME
+                    ? resolveAmbiguousName((NameExpr) o.node())
+                    : describe(resolveCommitted(o));
+            return target != null
+                    ? resolved(o, target)
+                    : unresolved(o, unsolvedName(o.node(), o.targetName()));
         } catch (Throwable t) {
+            // Safe-degrade net (PRD §4): any resolution can fail *unexpectedly* (UnsupportedOperation,
+            // StackOverflow in deep inference, …) — never a wrong answer; carry the miss in the tail.
             if (DEBUG) {
                 t.printStackTrace();
             }
-            return new ResolvedOccurrence(o.kind(), o.targetName(),
-                    o.startLine(), o.startCol(), o.endLine(), o.endCol(), null, failureOf(o.node(), t));
+            return unresolved(o, failureOf(o.node(), t));
         }
+    }
+
+    /** The committed-role kinds: each denotes exactly one thing, so resolution either binds or misses. */
+    private Object resolveCommitted(Occurrences.Occ o) {
+        return switch (o.kind()) {
+            case CALL          -> ((MethodCallExpr) o.node()).resolve();
+            case INSTANTIATION -> ((ObjectCreationExpr) o.node()).resolve();
+            case FIELD_ACCESS  -> ((FieldAccessExpr) o.node()).resolve();
+            case METHOD_REF    -> ((MethodReferenceExpr) o.node()).resolve();
+            case TYPE_REF      -> ((ClassOrInterfaceType) o.node()).resolve();
+            case ANNOTATION    -> ((AnnotationExpr) o.node()).resolve();
+            case NAME          -> throw new IllegalStateException("NAME resolves as an ambiguous name");
+        };
+    }
+
+    /**
+     * Resolve an <b>ambiguous name</b> (JLS §6.5): a bare {@link NameExpr} denotes a <em>value</em> if
+     * one is in scope, else a <em>type</em> (e.g. the qualifier of a static access {@code Foo.bar()} /
+     * {@code Foo.FIELD}), else a package (which we do not track). The choice is a decision over the
+     * non-throwing {@code isSolved()} API — a type qualifier is a first-class outcome, not a
+     * value-resolution failure recovered from a {@code catch}. Returns {@code null} when the name
+     * denotes neither a value nor a type in scope (a genuine miss).
+     */
+    private ResolvedTarget resolveAmbiguousName(NameExpr name) {
+        SymbolReference<? extends ResolvedValueDeclaration> asValue =
+                JavaParserFacade.get(typeSolver).solve(name);
+        if (asValue.isSolved()) {
+            return describe(asValue.getCorrespondingDeclaration());
+        }
+        SymbolReference<ResolvedTypeDeclaration> asType =
+                JavaParserFactory.getContext(name, typeSolver).solveType(name.getNameAsString(), List.of());
+        if (asType.isSolved()) {
+            return describe(asType.getCorrespondingDeclaration());
+        }
+        return null;
+    }
+
+    private ResolvedOccurrence resolved(Occurrences.Occ o, ResolvedTarget target) {
+        return new ResolvedOccurrence(o.kind(), o.targetName(),
+                o.startLine(), o.startCol(), o.endLine(), o.endCol(), target, null);
+    }
+
+    private ResolvedOccurrence unresolved(Occurrences.Occ o, ResolveFailure failure) {
+        return new ResolvedOccurrence(o.kind(), o.targetName(),
+                o.startLine(), o.startCol(), o.endLine(), o.endCol(), null, failure);
     }
 
     // ---------------------------------------------------------------- hierarchy resolution
@@ -413,7 +461,21 @@ public final class JavaParserEngine implements AnalysisEngine {
     /** Neutral facts for a safe-degrading miss (the node-inspecting half of the M0 FailureClassifier). */
     private static ResolveFailure failureOf(Node node, Throwable t) {
         String msg = t.getMessage() == null ? "" : t.getMessage().replaceAll("\\s+", " ").trim();
-        return new ResolveFailure(t.getClass().getSimpleName(), msg, t instanceof StackOverflowError,
+        return failure(node, t.getClass().getSimpleName(), msg, t instanceof StackOverflowError);
+    }
+
+    /**
+     * Neutral facts for an ambiguous name that resolved to <em>neither</em> a value nor a type — the
+     * same facts the equivalent {@code UnsolvedSymbolException} carries, so the classifier buckets it
+     * identically (typically {@code MISSING_CLASSPATH}). No exception is thrown: the non-throwing
+     * {@code solve()}/{@code solveType()} reported the miss cleanly; this only records its cause.
+     */
+    private static ResolveFailure unsolvedName(Node node, String name) {
+        return failure(node, "UnsolvedSymbolException", "Unsolved symbol : " + name, false);
+    }
+
+    private static ResolveFailure failure(Node node, String throwableType, String message, boolean stackOverflow) {
+        return new ResolveFailure(throwableType, message, stackOverflow,
                 involvesLambdaOrMethodRef(node), inPatternRecordSealed(node),
                 involvesVar(node), hasTypeArguments(node));
     }

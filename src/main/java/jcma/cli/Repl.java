@@ -99,8 +99,22 @@ final class Repl {
                     err.println("usage: refs <symbol> [--deadline <ms>]");
                     return;
                 }
-                forEachDeclaration(svc, cmd[1], deadline, out, err,
-                        target -> printRefs(out, svc.findReferences(target, deadline)));
+                List<Symbol> targets = svc.declarations(cmd[1], deadline);
+                if (targets.isEmpty()) {
+                    err.println("no declaration named '" + cmd[1] + "' in the index");
+                    return;
+                }
+                // The unconfirmed tail is name-keyed, so it is identical for every same-named
+                // declaration (e.g. a type and its constructor) — print it once for the query.
+                References shared = null;
+                for (Symbol target : targets) {
+                    References refs = svc.findReferences(target, deadline);
+                    printRefs(out, target, refs);
+                    shared = refs;
+                }
+                if (shared != null && shared.hasUnconfirmedTail()) {
+                    printUnconfirmed(out, shared);
+                }
             }
             case "supertypes" -> {
                 if (cmd.length != 2) {
@@ -194,7 +208,9 @@ final class Repl {
                 re-indexed before the next query.""");
     }
 
-    private static void printRefs(PrintStream out, References refs) {
+    private static void printRefs(PrintStream out, Symbol target, References refs) {
+        out.printf("%nreferences to %s  [%s]%n",
+                target.signature() != null ? target.signature() : target.moniker(), target.moniker());
         out.printf("  %d reference(s) in %d enclosing symbol(s)%n", refs.totalRefs(), refs.groups().size());
         for (ReferenceGroup g : refs.groups()) {
             out.printf("  %s  (%d)%n", g.enclosingSignature(), g.count());
@@ -202,11 +218,13 @@ final class Repl {
                 out.printf("    %s:%d  %s%n", r.file().getFileName(), r.range().startLine(), r.snippet());
             }
         }
-        if (refs.hasUnconfirmedTail()) {
-            out.printf("  unconfirmed (%d):%n", refs.unconfirmed().size());
-            for (UnconfirmedRef u : refs.unconfirmed()) {
-                out.printf("    %s:%d  %s  [%s]%n", u.file().getFileName(), u.range().startLine(), u.snippet(), u.cause());
-            }
+    }
+
+    /** The query-wide unconfirmed tail (name-keyed; printed once, after every declaration's confirmed set). */
+    private static void printUnconfirmed(PrintStream out, References refs) {
+        out.printf("%nunconfirmed (%d):%n", refs.unconfirmed().size());
+        for (UnconfirmedRef u : refs.unconfirmed()) {
+            out.printf("    %s:%d  %s  [%s]%n", u.file().getFileName(), u.range().startLine(), u.snippet(), u.cause());
         }
     }
 
