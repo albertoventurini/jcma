@@ -571,12 +571,12 @@ public final class EdgeResolver implements AutoCloseable {
             Optional<ResolvedRef> ref = engine.resolveMethodCall(unit, pos);
             if (ref.isPresent()) {
                 ResolvedRef r = ref.get();
-                return Optional.of(definitionAt(r.signature(), r.fqn(), r.declFile(), r.declLine()));
+                return Optional.of(definitionAt(r.signature(), r.fqn(), r.declFile(), r.declLine(), r.declCol()));
             }
             Optional<ResolvedType> type = engine.resolveType(unit, pos);
             if (type.isPresent()) {
                 ResolvedType t = type.get();
-                return Optional.of(definitionAt(t.fqn(), t.fqn(), t.declFile(), t.declLine()));
+                return Optional.of(definitionAt(t.fqn(), t.fqn(), t.declFile(), t.declLine(), t.declCol()));
             }
             return Optional.empty();
         } catch (IOException e) {
@@ -584,11 +584,11 @@ public final class EdgeResolver implements AutoCloseable {
         }
     }
 
-    private Definition definitionAt(String signature, String fqn, Path declFile, int declLine) {
+    private Definition definitionAt(String signature, String fqn, Path declFile, int declLine, int declCol) {
         if (declFile == null) {
             return new Definition(fqn, signature, null, -1, "");
         }
-        String moniker = monikerAt(fileIdOf(declFile), declLine);
+        String moniker = enclosingMoniker(fileIdOf(declFile), declLine, declCol);
         return new Definition(moniker != null ? moniker : fqn, signature, declFile, declLine,
                 snippet(declFile, declLine));
     }
@@ -606,7 +606,10 @@ public final class EdgeResolver implements AutoCloseable {
     /** A resolved target's graph moniker: the project decl's moniker, or a phantom from its signature. */
     private String targetMoniker(ResolvedTarget t) {
         if (t.declFile() != null) {
-            String m = monikerAt(fileIdOf(t.declFile()), t.declLine());
+            // Attribute by the declaration's start position, column-precise: a single-line record's
+            // components share the header line, so a line-only match would resolve a type reference to a
+            // component field (smaller span) instead of the type itself.
+            String m = enclosingMoniker(fileIdOf(t.declFile()), t.declLine(), t.declCol());
             if (m != null) {
                 return m;
             }
@@ -616,19 +619,12 @@ public final class EdgeResolver implements AutoCloseable {
         return key == null ? null : "~" + key;
     }
 
-    /** The moniker of the declaration at {@code (fileId, line)} — smallest symbol whose lines cover it. */
-    private String monikerAt(int fileId, int line) {
-        Symbol best = null;
-        for (Symbol s : symbolsByFile.getOrDefault(fileId, List.of())) {
-            Range r = s.range();
-            if (r.startLine() <= line && line <= r.endLine() && smaller(s, best)) {
-                best = s;
-            }
-        }
-        return best == null ? null : best.moniker();
-    }
-
-    /** The moniker of the smallest declaration whose range covers the use-site at {@code (line, col)}. */
+    /**
+     * The moniker of the smallest declaration whose range covers position {@code (line, col)}. Serves
+     * both attributions in the resolve pipeline: a use-site's <em>enclosing</em> declaration, and a
+     * resolved declaration's <em>own</em> moniker (keyed by its start position — see {@link
+     * #targetMoniker}). Column-precise containment is what disambiguates declarations sharing a line.
+     */
     private String enclosingMoniker(int fileId, int line, int col) {
         Symbol best = null;
         for (Symbol s : symbolsByFile.getOrDefault(fileId, List.of())) {

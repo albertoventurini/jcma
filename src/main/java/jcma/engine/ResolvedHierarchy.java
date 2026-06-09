@@ -4,7 +4,7 @@ package jcma.engine;
  * One resolved structural hierarchy relation (task-11a): a declaration in the parsed file relates to
  * a supertype / overridden method. The <em>source</em> declaration is identified by its name position
  * ({@code srcLine}/{@code srcCol}) so {@code jcma.resolve} can map it to the enclosing graph moniker
- * (the same {@code monikerAt} bridge the reference path uses); the <em>target</em> is a
+ * (the same {@code enclosingMoniker} bridge the reference path uses); the <em>target</em> is a
  * {@link ResolvedTarget} (a project decl, or {@code null} {@code declFile} → a phantom node).
  *
  * <p>A relation is only surfaced when the target resolved; an unresolvable supertype safe-degrades to

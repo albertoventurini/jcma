@@ -188,7 +188,7 @@ public final class JavaParserEngine implements AnalysisEngine {
                     : ((ObjectCreationExpr) node).resolve();
             Loc loc = locate(d);
             return Optional.of(new ResolvedRef(d.getQualifiedName(), d.getQualifiedSignature(),
-                    loc.file(), loc.line()));
+                    loc.file(), loc.line(), loc.col()));
         } catch (Throwable t) {
             if (DEBUG) t.printStackTrace();
             return Optional.empty();
@@ -209,7 +209,7 @@ public final class JavaParserEngine implements AnalysisEngine {
             }
             var ref = rt.asReferenceType();
             Loc loc = ref.getTypeDeclaration().map(this::locate).orElse(Loc.EXTERNAL);
-            return Optional.of(new ResolvedType(ref.getQualifiedName(), loc.file(), loc.line()));
+            return Optional.of(new ResolvedType(ref.getQualifiedName(), loc.file(), loc.line(), loc.col()));
         } catch (Throwable t) {
             if (DEBUG) t.printStackTrace();
             return Optional.empty();
@@ -307,7 +307,7 @@ public final class JavaParserEngine implements AnalysisEngine {
                     .map(this::describe)                       // project decl → locatable; jar/JDK → external
                     .orElseGet(() -> {                         // resolvable name but no declaration handle
                         String fqn = safe(ref::getQualifiedName);
-                        return new ResolvedTarget(fqn, fqn, null, -1, DeclKind.OTHER);
+                        return new ResolvedTarget(fqn, fqn, null, -1, -1, DeclKind.OTHER);
                     });
             out.add(new ResolvedHierarchy(kind, at[0], at[1], target));
         } catch (Throwable t) {
@@ -354,7 +354,7 @@ public final class JavaParserEngine implements AnalysisEngine {
         return true;
     }
 
-    /** 1-based {@code [line, col]} of a declaration's name node (the {@code monikerAt} bridge key). */
+    /** 1-based {@code [line, col]} of a declaration's name node (the moniker-bridge attribution key). */
     private static int[] namePos(com.github.javaparser.ast.expr.SimpleName name) {
         return name.getBegin().map(p -> new int[] {p.line, p.column}).orElse(new int[] {-1, -1});
     }
@@ -365,15 +365,16 @@ public final class JavaParserEngine implements AnalysisEngine {
         if (r instanceof ResolvedMethodLikeDeclaration m) {
             DeclKind kind = m instanceof ResolvedConstructorDeclaration ? DeclKind.CONSTRUCTOR : DeclKind.METHOD;
             return new ResolvedTarget(safe(m::getQualifiedName), safe(m::getQualifiedSignature),
-                    loc.file(), loc.line(), kind);
+                    loc.file(), loc.line(), loc.col(), kind);
         }
         if (r instanceof ResolvedTypeDeclaration t) {
             String fqn = safe(t::getQualifiedName);
-            return new ResolvedTarget(fqn, fqn, loc.file(), loc.line(), typeKind(t));
+            return new ResolvedTarget(fqn, fqn, loc.file(), loc.line(), loc.col(), typeKind(t));
         }
         if (r instanceof ResolvedValueDeclaration v) {
             String type = safe(() -> v.getType().describe());
-            return new ResolvedTarget(v.getName(), type + " " + v.getName(), loc.file(), loc.line(), DeclKind.FIELD);
+            return new ResolvedTarget(v.getName(), type + " " + v.getName(),
+                    loc.file(), loc.line(), loc.col(), DeclKind.FIELD);
         }
         if (r instanceof com.github.javaparser.resolution.types.ResolvedType rt) {
             // A reference type carries a type *declaration*; unwrap to it so a reference to a PROJECT
@@ -386,10 +387,10 @@ public final class JavaParserEngine implements AnalysisEngine {
                 }
             }
             String desc = safe(rt::describe);
-            return new ResolvedTarget(desc, desc, loc.file(), loc.line(), DeclKind.OTHER);
+            return new ResolvedTarget(desc, desc, loc.file(), loc.line(), loc.col(), DeclKind.OTHER);
         }
         String s = String.valueOf(r);
-        return new ResolvedTarget(s, s, loc.file(), loc.line(), DeclKind.OTHER);
+        return new ResolvedTarget(s, s, loc.file(), loc.line(), loc.col(), DeclKind.OTHER);
     }
 
     private static DeclKind typeKind(ResolvedTypeDeclaration t) {
@@ -483,8 +484,8 @@ public final class JavaParserEngine implements AnalysisEngine {
     }
 
     /** Declaration site of a resolved symbol; {@link Loc#EXTERNAL} when it lives in a jar/the JDK. */
-    private record Loc(Path file, int line) {
-        static final Loc EXTERNAL = new Loc(null, -1);
+    private record Loc(Path file, int line, int col) {
+        static final Loc EXTERNAL = new Loc(null, -1, -1);
     }
 
     private Loc locate(Object resolved) {
@@ -498,7 +499,8 @@ public final class JavaParserEngine implements AnalysisEngine {
                     .map(CompilationUnit.Storage::getPath)
                     .orElse(null);
             int line = n.getRange().map(r -> r.begin.line).orElse(-1);
-            return file == null ? Loc.EXTERNAL : new Loc(file, line);
+            int col = n.getRange().map(r -> r.begin.column).orElse(-1);
+            return file == null ? Loc.EXTERNAL : new Loc(file, line, col);
         } catch (Throwable t) {
             return Loc.EXTERNAL;
         }
