@@ -37,3 +37,7 @@ histogram, Spike-B perf curves), not just its GO/FALLBACK verdict — don't pre-
   (doesn't extend the spikes), but the spikes are retained, not thrown away.
 - Running autonomously: follow each milestone's **Execution notes** — proceed on proposed
   defaults, record the choices made, block on a human only when genuinely stuck.
+- **Navigating Java in this repo** ("where is X declared / who uses X / find a type by partial
+  name") → call jcma's MCP tools (`search_java_symbols`, `find_java_definition`,
+  `find_java_references`), not Grep/Read. If they're deferred, `ToolSearch` them first. This is
+  jcma's own dogfood: use it on itself.

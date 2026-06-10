@@ -110,6 +110,21 @@ class McpServerTest {
         assertEquals("object", health.get("inputSchema").get("type").asString());
     }
 
+    @Test
+    void everyToolSelfExemptsFromDeferralViaMeta() throws IOException {
+        JsonValue reply = drive(TOOLS_LIST + "\n").get(0);
+        List<JsonValue> tools = reply.get("result").get("tools").asArray().elements();
+        assertFalse(tools.isEmpty(), "tools/list advertises at least one tool");
+        for (JsonValue tool : tools) {
+            String name = tool.get("name").asString();
+            JsonValue meta = tool.get("_meta");
+            assertNotNull(meta, name + " carries a _meta object");
+            JsonValue flag = meta.get("anthropic/alwaysLoad");
+            assertNotNull(flag, name + " sets anthropic/alwaysLoad in _meta");
+            assertTrue(flag.asBoolean(), name + " self-exempts from tool-search deferral");
+        }
+    }
+
     // ---- tools/call -----------------------------------------------------------------------------
 
     @Test
