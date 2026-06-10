@@ -36,6 +36,19 @@ public final class McpServer {
 
     private static final String DEFAULT_PROTOCOL_VERSION = "2024-11-05";
 
+    /**
+     * Server-level guidance returned in the {@code initialize} result's optional {@code instructions}
+     * field — the MCP-sanctioned place to tell the client's model what the server is for and when to
+     * reach for it. Sent once per session (not per call), so a sentence or two is affordable.
+     */
+    private static final String INSTRUCTIONS =
+            "jcma is a semantic code-intelligence engine for Java projects. Its tools resolve symbols "
+                    + "through the type system (imports, overloads, scope) rather than matching text, so "
+                    + "prefer them over grep/Read when navigating Java: locating where a symbol is declared, "
+                    + "finding every confirmed use of a symbol, and searching for a type or member by partial "
+                    + "name. See the tool list for the specific operations. All operate on the current "
+                    + "project's indexed Java sources.";
+
     private final InputStream in;
     private final PrintStream out;
     private final PrintStream err;
@@ -125,6 +138,7 @@ public final class McpServer {
                 .with("serverInfo", JsonObject.empty()
                         .with("name", JsonValue.of("jcma"))
                         .with("version", JsonValue.of(jcma.cli.Main.VERSION)))
+                .with("instructions", JsonValue.of(INSTRUCTIONS))
                 .with("capabilities", JsonObject.empty().with("tools", JsonObject.empty()));
     }
 

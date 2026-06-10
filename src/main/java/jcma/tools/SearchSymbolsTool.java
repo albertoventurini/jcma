@@ -44,19 +44,35 @@ public final class SearchSymbolsTool implements ToolHandler {
 
     @Override
     public String description() {
-        return "Search declared symbols by name (substring, case-sensitive), ranked by relevance.";
+        return "Find Java declarations by name, ranked by relevance — locate a type or member when you know "
+                + "part of its name. `query` = case-sensitive substring; optional `kind` filter; `limit` "
+                + "(default 50). Then use find_definition/find_references to navigate.";
     }
 
     @Override
     public JsonValue schema() {
         JsonObject props = JsonObject.empty()
-                .with("query", ToolSupport.typed("string"))
-                .with("kind", ToolSupport.typed("string"))
-                .with("limit", ToolSupport.typed("integer"));
+                .with("query", ToolSupport.typed("string", "Case-sensitive substring of the simple name."))
+                .with("kind", ToolSupport.typed("string", "Optional declaration-kind filter.").with("enum", kindEnum()))
+                .with("limit", ToolSupport.typed("integer", "Max results (default " + DEFAULT_LIMIT + ")."));
         return JsonObject.empty()
                 .with("type", JsonValue.of("object"))
                 .with("properties", props)
                 .with("required", new JsonValue.JsonArray(java.util.List.of(JsonValue.of("query"))));
+    }
+
+    /** The declaration kinds worth filtering on, as a JSON enum (matches {@link SymbolKind} names). */
+    private static JsonValue.JsonArray kindEnum() {
+        SymbolKind[] kinds = {
+            SymbolKind.CLASS, SymbolKind.INTERFACE, SymbolKind.ENUM, SymbolKind.RECORD,
+            SymbolKind.ANNOTATION, SymbolKind.METHOD, SymbolKind.CONSTRUCTOR, SymbolKind.FIELD,
+            SymbolKind.ENUM_CONSTANT
+        };
+        List<JsonValue> names = new ArrayList<>(kinds.length);
+        for (SymbolKind k : kinds) {
+            names.add(JsonValue.of(k.name()));
+        }
+        return new JsonValue.JsonArray(names);
     }
 
     @Override

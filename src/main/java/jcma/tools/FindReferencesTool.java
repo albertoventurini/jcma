@@ -44,7 +44,9 @@ public final class FindReferencesTool implements ToolHandler {
 
     @Override
     public String description() {
-        return "Find all references to a symbol — by name (optionally qualified) or by file:line:col position.";
+        return "Return every confirmed use of a Java symbol (class, method, field, etc.) across the project — a "
+                + "semantic grep: resolved uses, not text hits. By name (optionally qualified) or by "
+                + "file:line:col; grouped by enclosing declaration.";
     }
 
     @Override

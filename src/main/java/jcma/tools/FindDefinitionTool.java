@@ -45,7 +45,9 @@ public final class FindDefinitionTool implements ToolHandler {
 
     @Override
     public String description() {
-        return "Find the declaration of a symbol — by name (optionally qualified) or by file:line:col position.";
+        return "Locate where a Java symbol (class, method, field, etc.) is declared — resolved semantically "
+                + "(imports/overloads understood, not text-matched). By name (`Foo` or qualified "
+                + "`com.acme.Foo.bar`) or by file:line:col.";
     }
 
     @Override

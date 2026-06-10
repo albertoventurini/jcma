@@ -79,6 +79,8 @@ class McpServerTest {
                 "protocolVersion echoes the client's");
         assertEquals("jcma", result.get("serverInfo").get("name").asString());
         assertNotNull(result.get("serverInfo").get("version"), "serverInfo carries a version");
+        assertTrue(result.get("instructions").asString().contains("Java"),
+                "instructions describe the server's Java focus for the client's model");
         assertInstanceOf(JsonValue.JsonObject.class, result.get("capabilities").get("tools"),
                 "capabilities.tools is an (empty) object");
     }

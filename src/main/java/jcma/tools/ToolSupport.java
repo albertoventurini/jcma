@@ -22,10 +22,12 @@ final class ToolSupport {
     /** The shared {@code {symbol?, file?, line?, col?}} input schema for find_definition/find_references. */
     static JsonValue symbolOrPositionSchema() {
         JsonObject props = JsonObject.empty()
-                .with("symbol", typed("string"))
-                .with("file", typed("string"))
-                .with("line", typed("integer"))
-                .with("col", typed("integer"));
+                .with("symbol", typed("string",
+                        "Simple name (`Foo`, `parse`) → all matches; qualified (`com.acme.Foo.parse`) → "
+                                + "narrowed. Use this OR file/line/col."))
+                .with("file", typed("string", ".java path; with line+col, points at one identifier."))
+                .with("line", typed("integer", "1-based line (position mode)."))
+                .with("col", typed("integer", "1-based column (position mode)."));
         return JsonObject.empty()
                 .with("type", JsonValue.of("object"))
                 .with("properties", props);
@@ -33,6 +35,10 @@ final class ToolSupport {
 
     static JsonObject typed(String type) {
         return JsonObject.empty().with("type", JsonValue.of(type));
+    }
+
+    static JsonObject typed(String type, String description) {
+        return typed(type).with("description", JsonValue.of(description));
     }
 
     /** {@code args} as an object, or an empty object when it is absent / JSON {@code null} / not an object. */
