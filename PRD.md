@@ -256,7 +256,10 @@ Task-09 for the full producer/backstop analysis.)
   (negligible cost, guarantees freshness for files we actually read, no O(tree)-per-query, no
   freshness window for read files), **plus** a **tree-scan `FreshnessSource`** (Task-11c) — an
   O(tree) poller that streams changed paths while the process is live (the signal is *complete*; only
-  latency is left to improve). A proactive **OS filesystem watcher** is the *optional* latency upgrade,
+  latency is left to improve). *New-file completeness during a session* — indexing a brand-new
+  untracked file and making it a `find_references` candidate (the case the on-access backstop alone
+  can't cover) — is owned by **M2 Task-10** (`milestones/M2/tasks/task-10-in-session-new-file-discovery.md`),
+  which closes the M1 Task-09→Task-11 deferral. A proactive **OS filesystem watcher** is the *optional* latency upgrade,
   **deferred past M1** (FFM-inotify as the native-clean path, or an external watcher process as the
   cross-platform escape hatch) — justified by measurement, not assumed. Both producers and the backstop
   are owned by the session-scoped **`AnalysisSession`** (Task-11c), which holds the one live

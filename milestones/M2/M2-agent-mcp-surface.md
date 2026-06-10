@@ -116,8 +116,11 @@ reference for task 1–2, re-typed into production shape, not copied.
 | 6 | [task-06-tools-engine-wrappers.md](tasks/task-06-tools-engine-wrappers.md) | Tools batch 3: `get_type_at`, `outline`, `get_source` (thin engine backends) |
 | 7 | [task-07-call-hierarchy.md](tasks/task-07-call-hierarchy.md) | `call_hierarchy` — `CALLS`-edge traversal, callers/callees, grouped |
 | 8 | [task-08-e2e-native-results.md](tasks/task-08-e2e-native-results.md) | End-to-end MCP harness + Claude Code registration + native; `M2-RESULTS.md` + PRD §11 fold-back |
+| 9 | [task-09-repl-startup-latency.md](tasks/task-09-repl-startup-latency.md) | REPL startup latency: persist the classpath at index time (move the build-tool subprocess off the hot path) |
+| 10 | [task-10-in-session-new-file-discovery.md](tasks/task-10-in-session-new-file-discovery.md) | In-session new-file discovery — **the `find_references` new-file completeness owner** (supersedes the M1 task-09→task-11 deferral) |
 
-Dependency order: 1 → 2 → 3 → {4, 5, 6, 7 independent} → 8.
+Dependency order: 1 → 2 → 3 → {4, 5, 6, 7 independent} → 8. Tasks 9–10 are independent
+real-repo-use fixes, each self-contained and pickable in a fresh session.
 
 ## Exit criteria (definition of done)
 
