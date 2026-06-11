@@ -5,8 +5,11 @@ import jcma.response.ToolResult.Fidelity;
 import jcma.response.ToolResult.FileCount;
 import jcma.response.ToolResult.FileRollupFragment;
 import jcma.response.ToolResult.Fragment;
+import jcma.response.ToolResult.LineMatchFragment;
+import jcma.response.ToolResult.MatchRollupFragment;
 import jcma.response.ToolResult.RefGroupFragment;
 import jcma.response.ToolResult.RefLine;
+import jcma.response.ToolResult.SymbolFragment;
 import jcma.response.ToolResult.TextFragment;
 
 import java.util.ArrayList;
@@ -120,7 +123,7 @@ public interface BudgetPolicy {
             }
         }
         if (groups.isEmpty()) {
-            return result; // nothing reference-shaped to degrade (e.g. a definition) — pass through
+            return reduceGrepToFit(result, cap); // grep-shaped backstop (M3 task-04), else pass-through
         }
 
         // Rung 1: drop snippet previews; keep every file:line + count. Lossless.
@@ -160,6 +163,82 @@ public interface BudgetPolicy {
         List<FileCount> files = new ArrayList<>(counts.size());
         counts.forEach((file, n) -> files.add(new FileCount(file, n)));
         return new FileRollupFragment(files);
+    }
+
+    /**
+     * The grep-aware backstop (M3 task-04) — symmetric with the {@link RefGroupFragment} path, for the
+     * band where {@code grep_java} content unexpectedly exceeds the cap (a very large {@code limit}, or
+     * long lines past the collapse threshold). Counts stay sacred; only fidelity degrades.
+     * <ol>
+     *   <li><b>Drop snippets</b> — render each {@link LineMatchFragment} as {@code file:line:col [kind]}
+     *       only (the source line is re-fetchable). Lossless.</li>
+     *   <li><b>Roll up per file</b> — a {@link MatchRollupFragment} of per-file counts (symbol + text),
+     *       still file-navigable, with the sacred total in the header.</li>
+     * </ol>
+     * Returns {@code result} unchanged when it is not grep-shaped (e.g. a definition).
+     */
+    private static ToolResult reduceGrepToFit(ToolResult result, int cap) {
+        List<Fragment> frags = result.fragments();
+        boolean hasGrep = frags.stream()
+                .anyMatch(f -> f instanceof LineMatchFragment || f instanceof SymbolFragment);
+        if (!hasGrep) {
+            return result; // nothing grep-shaped to degrade — pass through
+        }
+
+        // Rung 1: drop snippet previews from line matches; keep every file:line:col + [kind]. Lossless.
+        List<Fragment> atLoc = new ArrayList<>(frags.size() + 1);
+        for (Fragment f : frags) {
+            atLoc.add(f instanceof LineMatchFragment lm ? new LineMatchFragment(lm.location(), lm.kind(), "") : f);
+        }
+        atLoc.add(new TextFragment(
+                "Snippet previews omitted to fit the token budget; open each file:line for the source line."));
+        if (tokens(render(atLoc)) <= cap) {
+            return ToolResult.of(atLoc);
+        }
+
+        // Rung 2: roll grep matches up to per-file counts (symbol + text), keeping any header/marker text.
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        int symbols = 0;
+        int textMatches = 0;
+        List<Fragment> others = new ArrayList<>();
+        for (Fragment f : frags) {
+            if (f instanceof LineMatchFragment lm) {
+                counts.merge(fileFromLocation(lm.location()), 1, Integer::sum);
+                textMatches++;
+            } else if (f instanceof SymbolFragment sf) {
+                counts.merge(fileFromLocation(sf.location()), 1, Integer::sum);
+                symbols++;
+            } else {
+                others.add(f);
+            }
+        }
+        List<FileCount> files = new ArrayList<>(counts.size());
+        counts.forEach((file, n) -> files.add(new FileCount(file, n)));
+        List<Fragment> atRollup = new ArrayList<>();
+        atRollup.add(new TextFragment((symbols + textMatches) + " matches across " + files.size()
+                + (files.size() == 1 ? " file" : " files") + " (" + symbols + " symbols, " + textMatches + " text)"));
+        atRollup.add(new MatchRollupFragment(files));
+        atRollup.addAll(others);
+        atRollup.add(new TextFragment("Per-line matches rolled up to per-file counts to fit the token "
+                + "budget; narrow the query (or add `path=`) for line-level detail."));
+        return ToolResult.of(atRollup);
+    }
+
+    /** The file part of a {@code file:line} or {@code file:line:col} location (strips trailing {@code :int}s). */
+    private static String fileFromLocation(String location) {
+        String s = location;
+        for (int i = 0; i < 2; i++) {
+            int c = s.lastIndexOf(':');
+            if (c < 0) {
+                break;
+            }
+            String tail = s.substring(c + 1);
+            if (tail.isEmpty() || !tail.chars().allMatch(Character::isDigit)) {
+                break;
+            }
+            s = s.substring(0, c);
+        }
+        return s;
     }
 
     private static String render(List<Fragment> fragments) {

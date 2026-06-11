@@ -50,3 +50,39 @@ Failing tests + the calibration measurement → **STOP for user review of the th
 - tests green · native green · content-with-overflow-fallback working with `output`/`path`/`limit` ·
   thresholds/caps **calibrated from measured actuals** and recorded · rank-before-truncate verified ·
   honest not-exhaustive marker on every truncated result.
+
+## As built (2026-06-11)
+
+**Calibration corpus:** the jcma repo itself (~real Java sources), measured via a throwaway harness
+(indexed + ran broad/medium/narrow queries through `QueryService`, rendered full content, measured
+`BudgetPolicy.tokens`). Harness removed after capturing the numbers.
+
+**Measured actuals.**
+- Rendered match line ≈ **38 tokens** (stable 32–41 across queries) — the constant the threshold is
+  derived from.
+- Clean distribution cliff: real queries are either **≤9 matches** (65–321 tokens, trivially fit) or
+  **≥108 matches** (4 405+ tokens, over the 4000 cap) — nothing lands between.
+- Whole-word ranking materially reorders broad queries: `id` = 106 whole-word vs **399 incidental
+  substring** text hits (`valid`/`width`/`candidate`); `query` = 196/7; `get` = 8/158.
+
+**Calibrated constants (signed off).**
+- **`COLLAPSE_THRESHOLD = 100`** — `DEFAULT_CAP 4000 ÷ ~38 tok/line ≈ 105`, rounded down for headroom;
+  matches the distribution cliff. Doubles as a budget guarantee: content (≤100 × 38 ≈ 3800 tok) fits
+  4000 regardless of `limit`, so the budget backstop is a true safety net, not a routine rung.
+- **Per-tool cap = `DEFAULT_CAP` (4000), no `grep_java` override** — content at `limit=50` ≈ 1900 tok;
+  the widest aggregation observed (129 files for `id`) ≈ 1900 tok — both well under 4000.
+- **`TOP_SNIPPETS = 5`** one-per-file preview (~190 tokens) in the auto-collapse view.
+
+**Ranking = Option B + diversity** (`TextRanking.byRelevance`): whole-word desc, then `(file, line,
+col)`; the auto-collapse preview takes one hit per file by walking the ranked stream.
+
+**Shape delivered.** `output = content | files | count`; repo-relative `path` glob applied before
+ranking/limit (`QueryService.pathFilter` over the `AnalysisSession.repoRoot()` seam); content
+auto-collapses past the threshold to `MatchRollupFragment` + one-per-file sample + narrow hint, all
+behind an honest *N total · not exhaustive* marker. `BudgetPolicy.reduceToFit` gained a grep-aware
+backstop (drop snippets → per-file `MatchRollupFragment`), symmetric with the `RefGroupFragment`
+rungs.
+
+**Verified.** `./gradlew test` green · `nativeCompile` green · manual dogfood through the native
+`grep_java` MCP tool (broad `id` → aggregation map + 5-sample preview + hint, bounded tokens; adding
+`path=src/main/java/jcma/response/**` → line-level content).

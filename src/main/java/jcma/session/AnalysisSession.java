@@ -185,7 +185,7 @@ public final class AnalysisSession implements AutoCloseable {
         for (TextIndex.TextOccurrence o : store.searchText(spec)) {
             Path rel = fileTable.pathOf(o.fileId());
             String file = rel == null ? null : repoRoot.resolve(rel).toString();
-            hits.add(new TextHit(file, o.line(), o.col(), label(o.kind()), o.lineSnippet()));
+            hits.add(new TextHit(file, o.line(), o.col(), label(o.kind()), o.wholeWord(), o.lineSnippet()));
         }
         return hits;
     }
@@ -248,6 +248,11 @@ public final class AnalysisSession implements AutoCloseable {
     /** The referrer files the most recent {@link #refresh} returned to unresolved (observability/tests). */
     public Set<Path> invalidatedByLastRefresh() {
         return lastInvalidated;
+    }
+
+    /** The absolute, normalized repo root — the seam that relativizes hit paths for the {@code path} glob. */
+    public Path repoRoot() {
+        return repoRoot;
     }
 
     /** A moniker's display signature (passthrough to the resolver) — for CLI/REPL rendering. */

@@ -64,7 +64,7 @@ public record ToolResult(List<Fragment> fragments, boolean isError) {
     /** One rendered piece of a result; the sealed set the writer and budget know how to handle. */
     public sealed interface Fragment
             permits TextFragment, SymbolFragment, LineMatchFragment, RefGroupFragment, FileRollupFragment,
-                    UnconfirmedTailFragment {
+                    MatchRollupFragment, UnconfirmedTailFragment {
         String render();
     }
 
@@ -178,6 +178,33 @@ public record ToolResult(List<Fragment> fragments, boolean isError) {
                 }
                 sb.append("  ").append(fc.file()).append(": ").append(fc.count())
                         .append(fc.count() == 1 ? " ref" : " refs");
+            }
+            return sb.toString();
+        }
+    }
+
+    /**
+     * The per-file count rollup for the {@code grep_java} large-result UX (M3 task-04): the navigable
+     * map of <em>which files</em> hold the matches and how many each. The grep sibling of
+     * {@link FileRollupFragment} ({@code matches} rather than {@code refs}), single-sourced so the
+     * {@code output=count|files} aggregation, the auto-collapse view, and the budget backstop all render
+     * per-file counts identically. The header (total / symbol-vs-text split) is a separate
+     * {@link TextFragment}, mirroring how the reference rollup keeps its {@code Total refs} header apart.
+     */
+    public record MatchRollupFragment(List<FileCount> files) implements Fragment {
+
+        public MatchRollupFragment {
+            files = List.copyOf(files);
+        }
+
+        @Override public String render() {
+            StringBuilder sb = new StringBuilder();
+            for (FileCount fc : files) {
+                if (sb.length() > 0) {
+                    sb.append('\n');
+                }
+                sb.append("  ").append(fc.file()).append(": ").append(fc.count())
+                        .append(fc.count() == 1 ? " match" : " matches");
             }
             return sb.toString();
         }

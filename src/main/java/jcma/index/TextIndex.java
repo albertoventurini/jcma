@@ -68,9 +68,13 @@ public final class TextIndex implements AutoCloseable {
 
     /**
      * One text-search match: the file, the precise 1-based line/col of the match within the matched
-     * unit, the unit's {@link TextKind} (so the hit can be labelled), and the matching line's snippet.
+     * unit, the unit's {@link TextKind} (so the hit can be labelled), a {@code wholeWord} quality flag
+     * (the match is bounded by non-identifier chars on both sides — a real token, not an incidental
+     * substring; the ranking key for the {@code grep_java} text tier, M3 task-04), and the matching
+     * line's snippet.
      */
-    public record TextOccurrence(int fileId, int line, int col, TextKind kind, String lineSnippet) {}
+    public record TextOccurrence(int fileId, int line, int col, TextKind kind, boolean wholeWord,
+            String lineSnippet) {}
 
     // A fileId-bearing unit, used internally for the sort + write (TextUnit itself is fileId-free —
     // it is the engine seam type, produced before file ids are assigned).
@@ -300,7 +304,8 @@ public final class TextIndex implements AutoCloseable {
             }
             if (line != lastLine) {
                 int col = (line == startLine) ? startCol + (idx - lineStart) : (idx - lineStart) + 1;
-                out.add(new TextOccurrence(fileId, line, col, kind, snippet(text, lineStart)));
+                boolean ww = wholeWord(text, idx, idx + query.length());
+                out.add(new TextOccurrence(fileId, line, col, kind, ww, snippet(text, lineStart)));
                 lastLine = line;
             }
             from = idx + Math.max(1, query.length());
@@ -326,10 +331,23 @@ public final class TextIndex implements AutoCloseable {
             }
             if (line != lastLine) {
                 int col = (line == startLine) ? startCol + (idx - lineStart) : (idx - lineStart) + 1;
-                out.add(new TextOccurrence(fileId, line, col, kind, snippet(text, lineStart)));
+                boolean ww = wholeWord(text, idx, m.end());
+                out.add(new TextOccurrence(fileId, line, col, kind, ww, snippet(text, lineStart)));
                 lastLine = line;
             }
         }
+    }
+
+    // The match [start, end) is a whole word iff it is bounded by a non-identifier char (or the unit
+    // edge) on both sides — so a real token (`id`) outranks an incidental substring (`valid`, `width`).
+    private static boolean wholeWord(String text, int start, int end) {
+        boolean leftOk = start == 0 || !isIdentChar(text.charAt(start - 1));
+        boolean rightOk = end >= text.length() || !isIdentChar(text.charAt(end));
+        return leftOk && rightOk;
+    }
+
+    private static boolean isIdentChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_' || c == '$';
     }
 
     private static String snippet(String text, int lineStart) {

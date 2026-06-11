@@ -154,4 +154,53 @@ class BudgetPolicyTest {
         ToolResult out = p.apply("find_references", in);
         assertEquals(in.render(), out.render(), "manual() passes everything through");
     }
+
+    // ---- M3 task-04: grep-aware backstop --------------------------------------------------------
+
+    /** A synthetic {@code grep_java} content result: {@code files × perFile} labelled text line matches. */
+    private static ToolResult grep(int files, int perFile, int snippetLen) {
+        String body = "GREPSNIPPET" + "z".repeat(Math.max(0, snippetLen));
+        List<ToolResult.Fragment> out = new ArrayList<>();
+        for (int i = 0; i < files; i++) {
+            for (int j = 0; j < perFile; j++) {
+                out.add(new ToolResult.LineMatchFragment(
+                        "src/pkg/File" + i + ".java:" + (j + 1) + ":3", "string-literal", body));
+            }
+        }
+        return ToolResult.of(out);
+    }
+
+    @Test
+    void grepRungOneDropsSnippetsButKeepsEveryLineLocation() {
+        // Long snippets bust the cap, but the bare file:line:col locations fit → rung 1 (no rollup).
+        BudgetPolicy p = BudgetPolicy.capped(Map.of("grep_java", 300), 300, Metrics.noop());
+        ToolResult out = p.apply("grep_java", grep(3, 3, 140));
+        String r = out.render();
+
+        assertTrue(p.estimateTokens(r) <= 300, "bounded to the cap, was " + p.estimateTokens(r));
+        assertFalse(r.contains("GREPSNIPPET"), "snippet previews are dropped: " + r);
+        for (int i = 0; i < 3; i++) {
+            for (int j = 1; j <= 3; j++) {
+                assertTrue(r.contains("File" + i + ".java:" + j + ":3"),
+                        "kept location File" + i + ".java:" + j + ":3: " + r);
+            }
+        }
+    }
+
+    @Test
+    void grepRungTwoRollsUpToPerFileCountsWhenEvenLocationsBust() {
+        // 90 matches: even bare locations bust 200 → rung 2 rolls grep matches up to per-file counts.
+        BudgetPolicy p = BudgetPolicy.capped(Map.of(), 200, Metrics.noop());
+        ToolResult out = p.apply("grep_java", grep(3, 30, 2));
+        String r = out.render();
+
+        assertTrue(p.estimateTokens(r) <= 200, "bounded to the cap, was " + p.estimateTokens(r));
+        assertFalse(r.contains(".java:1:3"), "per-line entries are rolled away: " + r);
+        for (int i = 0; i < 3; i++) {
+            assertTrue(r.contains("src/pkg/File" + i + ".java: 30 matches"),
+                    "every file kept (navigable) with its grep count: " + r);
+        }
+        assertTrue(r.toLowerCase(java.util.Locale.ROOT).contains("narrow"),
+                "advises narrowing for line-level detail: " + r);
+    }
 }

@@ -13,12 +13,15 @@ import jcma.session.TextHit;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.FileSystems;
 import java.nio.file.Path;
+import java.nio.file.PathMatcher;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
@@ -147,10 +150,25 @@ public final class QueryService implements AutoCloseable {
      */
     public List<SymbolHit> searchSymbols(SearchSpec spec, SymbolKind kind, int limit, Duration deadline)
             throws QueryTimeoutException, IOException {
+        return searchSymbols(spec, kind, null, limit, deadline);
+    }
+
+    /**
+     * As above, additionally scoped to a repo-relative {@code pathGlob} (M3 task-04): hits whose source
+     * file is outside the glob are dropped <em>before</em> ranking + {@code limit}, so the truncation
+     * marker reflects the scoped total. A {@code null} glob keeps every hit; a symbol with no source
+     * path is excluded when a glob is set (it cannot satisfy a path scope).
+     */
+    public List<SymbolHit> searchSymbols(SearchSpec spec, SymbolKind kind, String pathGlob, int limit,
+            Duration deadline) throws QueryTimeoutException, IOException {
         List<SymbolHit> hits = execute(() -> session.searchSymbols(spec), deadline);
+        Predicate<Path> inScope = pathFilter(session.repoRoot(), pathGlob);
         Stream<SymbolHit> stream = hits.stream();
         if (kind != null) {
             stream = stream.filter(h -> h.symbol().kind() == kind);
+        }
+        if (pathGlob != null) {
+            stream = stream.filter(h -> inScope.test(h.file()));
         }
         return stream
                 .sorted(Comparator.comparing(SymbolHit::symbol, SymbolRanking.byRelevance(spec.pattern())))
@@ -171,13 +189,56 @@ public final class QueryService implements AutoCloseable {
     /** {@code grep_java} text tier with the full {@link SearchSpec} match policy (regex / {@code fixed_string} / case). */
     public List<TextHit> searchText(SearchSpec spec, int limit, Duration deadline)
             throws QueryTimeoutException, IOException {
+        return searchText(spec, null, limit, deadline);
+    }
+
+    /**
+     * As above, additionally scoped to a repo-relative {@code pathGlob} (M3 task-04) and ordered by
+     * {@link TextRanking#byRelevance} (whole-word before incidental substring, then {@code (file, line,
+     * col)}). The path filter runs <em>before</em> the sort + {@code limit}, so the scoped total is
+     * honest. A {@code null} glob keeps every hit.
+     */
+    public List<TextHit> searchText(SearchSpec spec, String pathGlob, int limit, Duration deadline)
+            throws QueryTimeoutException, IOException {
         List<TextHit> hits = execute(() -> session.searchText(spec), deadline);
-        return hits.stream()
-                .sorted(Comparator.comparing((TextHit h) -> h.file() == null ? "" : h.file())
-                        .thenComparingInt(TextHit::line)
-                        .thenComparingInt(TextHit::col))
+        Predicate<Path> inScope = pathFilter(session.repoRoot(), pathGlob);
+        Stream<TextHit> stream = hits.stream();
+        if (pathGlob != null) {
+            stream = stream.filter(h -> h.file() != null && inScope.test(Path.of(h.file())));
+        }
+        return stream
+                .sorted(TextRanking.byRelevance())
                 .limit(limit)
                 .toList();
+    }
+
+    /** The absolute, normalized repo root — surfaced for the tools' {@code path}-glob relativization. */
+    public Path repoRoot() {
+        return session.repoRoot();
+    }
+
+    /**
+     * A predicate matching an absolute hit path against a repo-relative {@code pathGlob} (e.g.
+     * {@code src/main/**}, {@code **}{@code /*Test.java}). A {@code null} glob admits everything; a path
+     * outside the repo root, or a {@code null} path, never matches a non-null glob.
+     */
+    private static Predicate<Path> pathFilter(Path repoRoot, String pathGlob) {
+        if (pathGlob == null) {
+            return p -> true;
+        }
+        PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:" + pathGlob);
+        return p -> {
+            if (p == null) {
+                return false;
+            }
+            Path rel;
+            try {
+                rel = repoRoot.relativize(p.toAbsolutePath().normalize());
+            } catch (IllegalArgumentException differentRoot) {
+                return false;
+            }
+            return matcher.matches(rel);
+        };
     }
 
     /** {@code find_references} by use-site position (go-to-refs). */

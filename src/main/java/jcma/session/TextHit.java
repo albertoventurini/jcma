@@ -8,10 +8,12 @@ package jcma.session;
  * path} via its {@code FileTable}/{@code repoRoot}. A neutral, query-package-free carrier — mirrors
  * {@link SymbolHit} so the shaping/ranking layers stay off any session↔query dependency cycle.
  *
- * @param file    the declaring source file (repo-relative or absolute, as the session resolves it)
- * @param line    1-based line of the match within the file
- * @param col     1-based column of the match
- * @param kind    the text-kind label ({@code string-literal} / {@code comment} / {@code javadoc})
- * @param snippet the matching line's text
+ * @param file      the declaring source file (repo-relative or absolute, as the session resolves it)
+ * @param line      1-based line of the match within the file
+ * @param col       1-based column of the match
+ * @param kind      the text-kind label ({@code string-literal} / {@code comment} / {@code javadoc})
+ * @param wholeWord the match is a real token (non-identifier boundaries), not an incidental substring
+ *                  — the {@code grep_java} text-tier ranking key (M3 task-04)
+ * @param snippet   the matching line's text
  */
-public record TextHit(String file, int line, int col, String kind, String snippet) {}
+public record TextHit(String file, int line, int col, String kind, boolean wholeWord, String snippet) {}
