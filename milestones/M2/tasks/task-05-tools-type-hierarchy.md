@@ -1,10 +1,14 @@
-# M2 · Task 5 — Tools batch 2: `find_supertypes`, `find_subtypes`, `find_implementations` (transitive)
+# M2 · Task 5 — Tools batch 2: `find_supertypes`, `find_subtypes` (transitive)
 
 > Type-hierarchy navigation. M1 ships **direct** edges; M2 walks them **transitively**.
+>
+> **Status: DONE (2026-06-11).** Shipped as two tools — `find_java_supertypes` +
+> `find_java_subtypes`. **`find_implementations` deferred** (needs an abstract-class modifier bit;
+> see "Decisions settled" below). Names follow the `find_java_*` convention.
 
 ## Decision locked (overview)
 **Transitive, not direct-only.** M1's `EdgeResolver.supertypes`/`subtypes` return *direct*
-`EXTENDS`/`IMPLEMENTS`/`OVERRIDES` neighbours; these tools do a depth-bounded transitive walk.
+`EXTENDS`/`IMPLEMENTS`/`OVERRIDES` neighbours; these tools do a node-count-bounded transitive BFS walk.
 
 ## Prerequisites (read first, fresh session)
 - **Done before this:** tasks 2, 3 (+ task-4 establishes the tool-wiring pattern).
@@ -49,7 +53,29 @@ Write failing tests + fixtures → **STOP for review** → implement → verify.
 - tests green · native green · walks are transitive, cycle-safe, depth-bounded + marked · results
   context-bearing + budgeted.
 
-## Decisions to settle / record (PRD §11)
-- **Default depth bound** + how truncation is signalled — recommend a generous default (e.g. unbounded
-  with a node-count cap rather than a depth cap, since real hierarchies are shallow) calibrated on the
-  corpora; record the choice.
+## Decisions settled (recorded in PRD §11, *M2 Task-05*)
+- **Walk bound = node-count cap, not depth** (real hierarchies are shallow but can fan out):
+  **default 500**, unbounded depth. Hitting it sets a `truncated` flag, surfaced as a
+  `(truncated at 500)` header marker — never a silent short answer. The output-token `BudgetPolicy`
+  cap is separate and still applies.
+- **Relationship display = depth + edge kind per row** (`extends → depth 2`), in the `SymbolFragment`
+  `detail` slot — not a full path. Reuses the existing fragment type, so it flows through the budget
+  unchanged.
+- **Lazy per-node warming:** each dequeued node warms its own structural layer + its anchor type's
+  candidate files. A method node anchors on its **enclosing type's** name (an overrider lives in a
+  subtype *type*, referencing that type — not at a call of the method name).
+- **`find_implementations` deferred** pending an *abstract-class* modifier bit in `Symbol.flags`
+  (engine `Outline` → a `flags` bit → a "concrete only" filter). Today only `INTERFACE`/`ANNOTATION`
+  are distinguishable by `kind`; rather than ship a half-correct filter, it lands in the follow-up
+  task on top of the same subtype walk.
+
+## Implementation notes (as built)
+- `jcma/resolve/Hierarchy.java` (BFS walk, `Hierarchy.Result(nodes, truncated)`, `MAX_NODES = 500`) +
+  `jcma/resolve/HierarchyNode.java` (record: moniker, signature, kind, file, line, depth, via).
+  `EdgeResolver` constructs `Hierarchy` and exposes `supertypesTransitive`/`subtypesTransitive`
+  (+ package-private `(Symbol, int maxNodes)` test seams) and the package-private walk hooks
+  (`symbolFor`, `fwdHierarchy`/`revHierarchy`, `warmHierarchyNeighborhood`, `hierarchyNode`).
+- Session + `QueryService` passthroughs mirror the direct `supertypes`/`subtypes`, plus position-mode
+  `…At(file,pos)` variants (resolve site → `store.symbol` → walk).
+- `Shaping.hierarchy(relation, targetDisplay, Result)` emits the sacred-count header + one
+  `SymbolFragment` per node. Tools `FindSupertypesTool`/`FindSubtypesTool` registered in `Serve`.

@@ -6,6 +6,7 @@ import jcma.index.SearchSpec;
 import jcma.index.Symbol;
 import jcma.index.SymbolKind;
 import jcma.resolve.Definition;
+import jcma.resolve.Hierarchy;
 import jcma.resolve.References;
 import jcma.session.AnalysisSession;
 import jcma.session.SymbolHit;
@@ -253,6 +254,30 @@ public final class QueryService implements AutoCloseable {
 
     public List<MonikerEdge> subtypes(Symbol target, Duration deadline) throws QueryTimeoutException, IOException {
         return execute(() -> session.subtypes(target), deadline);
+    }
+
+    /** {@code find_supertypes} — the transitive supertype closure, time-boxed. */
+    public Hierarchy.Result supertypesTransitive(Symbol target, Duration deadline)
+            throws QueryTimeoutException, IOException {
+        return execute(() -> session.supertypesTransitive(target), deadline);
+    }
+
+    /** {@code find_subtypes} — the transitive subtype/overrider closure, time-boxed. */
+    public Hierarchy.Result subtypesTransitive(Symbol target, Duration deadline)
+            throws QueryTimeoutException, IOException {
+        return execute(() -> session.subtypesTransitive(target), deadline);
+    }
+
+    /** {@code find_supertypes} by use-site position (go-to-hierarchy). */
+    public Hierarchy.Result supertypesTransitiveAt(Path file, Position pos, Duration deadline)
+            throws QueryTimeoutException, IOException {
+        return execute(() -> session.supertypesTransitiveAt(file, pos), deadline);
+    }
+
+    /** {@code find_subtypes} by use-site position (go-to-hierarchy). */
+    public Hierarchy.Result subtypesTransitiveAt(Path file, Position pos, Duration deadline)
+            throws QueryTimeoutException, IOException {
+        return execute(() -> session.subtypesTransitiveAt(file, pos), deadline);
     }
 
     /** A moniker's display signature (pure, no deadline) — passthrough to the session. */

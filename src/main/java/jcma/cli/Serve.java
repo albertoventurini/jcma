@@ -18,6 +18,8 @@ import jcma.response.BudgetPolicy;
 import jcma.session.AnalysisSession;
 import jcma.tools.FindDefinitionTool;
 import jcma.tools.FindReferencesTool;
+import jcma.tools.FindSubtypesTool;
+import jcma.tools.FindSupertypesTool;
 import jcma.tools.GrepJavaTool;
 import jcma.tools.SearchSymbolsTool;
 import jcma.workspace.IndexLayout;
@@ -102,6 +104,8 @@ final class Serve {
         }));
         registry.register(new FindDefinitionTool(() -> session.svc, budget));
         registry.register(new FindReferencesTool(() -> session.svc, budget));
+        registry.register(new FindSupertypesTool(() -> session.svc, budget));
+        registry.register(new FindSubtypesTool(() -> session.svc, budget));
         registry.register(new SearchSymbolsTool(() -> session.svc, budget));
         registry.register(new GrepJavaTool(() -> session.svc, budget));
 

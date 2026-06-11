@@ -43,8 +43,9 @@ Spikes under `milestones/m0-spike/` stay intact.
   by measurement, not assumed. *(M3 became the `grep_java` degrade-to-text milestone — see
   `milestones/M3/`; large-repo perf moved to M4.)*
 - **Transitive type hierarchy** (not direct-only). M1's `supertypes`/`subtypes` return direct edges;
-  M2's `find_subtypes`/`find_supertypes`/`find_implementations` walk them transitively with a depth
-  bound (task 5).
+  M2's `find_subtypes`/`find_supertypes` walk them transitively with a **node-count** bound (task 5).
+  `find_implementations` is **deferred** (needs an abstract-class modifier bit) — task 5 ships the
+  two type-hierarchy tools only.
 - **Deliverable = separate task files** (`tasks/task-NN-*.md`), one per task, each pickable in a
   fresh Claude Code session.
 
@@ -113,7 +114,7 @@ reference for task 1–2, re-typed into production shape, not copied.
 | 2 | [task-02-mcp-server-lifecycle.md](tasks/task-02-mcp-server-lifecycle.md) | MCP stdio server: lifecycle, `initialize`, `tools/list`, `tools/call` dispatch + errors; owns one `QueryService`; **pause-to-index** |
 | 3 | [task-03-response-budget.md](tasks/task-03-response-budget.md) | Agent-response layer: `ToolResult` model + grouping/snippets/FQNs + **token budget & truncation** |
 | 4 | [task-04-tools-core-navigation.md](tasks/task-04-tools-core-navigation.md) | Tools batch 1: `find_definition`, `find_references`, `search_symbols` |
-| 5 | [task-05-tools-type-hierarchy.md](tasks/task-05-tools-type-hierarchy.md) | Tools batch 2: `find_supertypes`, `find_subtypes`, `find_implementations` (**transitive**) |
+| 5 | [task-05-tools-type-hierarchy.md](tasks/task-05-tools-type-hierarchy.md) | Tools batch 2: `find_supertypes`, `find_subtypes` (**transitive**) — `find_implementations` deferred |
 | 6 | [task-06-tools-engine-wrappers.md](tasks/task-06-tools-engine-wrappers.md) | Tools batch 3: `get_type_at`, `outline`, `get_source` (thin engine backends) |
 | 7 | [task-07-call-hierarchy.md](tasks/task-07-call-hierarchy.md) | `call_hierarchy` — `CALLS`-edge traversal, callers/callees, grouped |
 | 8 | [task-08-e2e-native-results.md](tasks/task-08-e2e-native-results.md) | End-to-end MCP harness + Claude Code registration + native; `M2-RESULTS.md` + PRD §11 fold-back |
@@ -138,7 +139,8 @@ real-repo-use fixes, each self-contained and pickable in a fresh session.
 
 - **Token-budget policy** (Task 3) — per-tool result caps + truncation markers, behind a swappable
   policy, **instrumented**, calibrated from real output sizes (not round numbers). *(PRD §6/§8.)*
-- **Transitive hierarchy depth bound** (Task 5) — default depth + how a truncated walk is marked.
+- ~~**Transitive hierarchy depth bound** (Task 5)~~ — *settled:* node-count cap (default 500,
+  unbounded depth), `(truncated at 500)` header marker; `find_implementations` deferred. *(PRD §11.)*
 - **`call_hierarchy` depth** (Task 7) — one level vs. recursive (recommend one level + explicit
   "expand" via a follow-up call; decide on measurement).
 - **`get_type_at` member-summary depth** and **`get_source` size bound** (Task 6).

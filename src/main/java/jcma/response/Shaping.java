@@ -1,7 +1,10 @@
 package jcma.response;
 
+import jcma.index.EdgeType;
 import jcma.index.Symbol;
 import jcma.resolve.Definition;
+import jcma.resolve.Hierarchy;
+import jcma.resolve.HierarchyNode;
 import jcma.resolve.Ref;
 import jcma.resolve.ReferenceGroup;
 import jcma.resolve.References;
@@ -80,6 +83,49 @@ public final class Shaping {
         }
         String snippet = d.snippet() == null || d.snippet().isEmpty() ? null : d.snippet();
         return new SymbolFragment(display(d.signature(), d.moniker()), null, d.file() + ":" + d.line(), snippet);
+    }
+
+    /**
+     * A transitive type-hierarchy answer (M2 task-05): a leading {@link TextFragment} header carrying
+     * the sacred count (e.g. {@code Subtypes of app.D: 3}, plus a {@code (truncated at N)} marker when
+     * the node cap fired), then one {@link SymbolFragment} per node — its signature, kind,
+     * {@code file:line} (or the uniform external form), and the relationship in the {@code detail} slot
+     * ({@code extends → depth 2}). Reuses {@link SymbolFragment} so the result flows through the budget
+     * unchanged. A {@code null} {@code targetDisplay} (position mode) drops the {@code of …} clause.
+     */
+    public static List<Fragment> hierarchy(String relation, String targetDisplay, Hierarchy.Result result) {
+        List<Fragment> out = new ArrayList<>();
+        StringBuilder header = new StringBuilder(relation);
+        if (targetDisplay != null) {
+            header.append(" of ").append(targetDisplay);
+        }
+        header.append(": ").append(result.nodes().size());
+        if (result.truncated()) {
+            header.append(" (truncated at ").append(Hierarchy.MAX_NODES).append(')');
+        }
+        out.add(new TextFragment(header.toString()));
+        for (HierarchyNode n : result.nodes()) {
+            out.add(hierarchyNode(n));
+        }
+        return out;
+    }
+
+    /** One hierarchy node → a {@link SymbolFragment} with the {@code via}/{@code depth} relationship as its detail. */
+    private static SymbolFragment hierarchyNode(HierarchyNode n) {
+        String location = (n.file() == null || n.line() < 0) ? EXTERNAL : n.file() + ":" + n.line();
+        String detail = relationLabel(n.via()) + " → depth " + n.depth();
+        String kind = n.kind() == null ? null : n.kind().name();
+        return new SymbolFragment(n.signature(), kind, location, detail);
+    }
+
+    /** The lower-case edge-keyword label for a hierarchy {@code via} edge ({@code extends}/{@code implements}/…). */
+    private static String relationLabel(EdgeType via) {
+        return switch (via) {
+            case EXTENDS -> "extends";
+            case IMPLEMENTS -> "implements";
+            case OVERRIDES -> "overrides";
+            default -> via.name().toLowerCase();
+        };
     }
 
     /** One confirmed reference group: "called from {@code X}" + a {@code file:line  snippet} per site. */

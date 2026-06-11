@@ -23,6 +23,7 @@ import jcma.index.MonikerEdge;
 import jcma.index.Occurrence;
 import jcma.index.Range;
 import jcma.index.Symbol;
+import jcma.index.SymbolKind;
 import jcma.index.SourceSet;
 import jcma.index.UsageNameIndex;
 import jcma.index.UsageNameIndexer;
@@ -59,6 +60,7 @@ public final class EdgeResolver implements AutoCloseable {
     private final Indexer indexer;
     private final Path repoRoot;
     private final Metrics metrics;
+    private final Hierarchy hierarchy = new Hierarchy(this); // transitive type-hierarchy walk (task-05)
 
     // Built once at open() from the (immutable-under-Tier-2) declaration set.
     private final Map<Integer, List<Symbol>> symbolsByFile = new HashMap<>();
@@ -445,6 +447,112 @@ public final class EdgeResolver implements AutoCloseable {
         }
     }
 
+    // ------------------------------------------------------------------ transitive hierarchy (task-05)
+
+    /**
+     * {@code find_supertypes(target)} (PRD §6): the <b>transitive</b> supertype closure — every
+     * ancestor type/interface (and, for a method target, the overridden chain) — walked over {@code
+     * fwd} hierarchy edges. External/JDK ancestors are included, marked external; the node cap is
+     * {@link Hierarchy#MAX_NODES}.
+     */
+    public Hierarchy.Result supertypesTransitive(Symbol target) {
+        return hierarchy.supertypes(target, Hierarchy.MAX_NODES);
+    }
+
+    /**
+     * {@code find_subtypes(target)} (PRD §6): the <b>transitive</b> subtype closure — every descendant
+     * type/implementor (and, for a method target, every transitive overrider) — walked over {@code rev}
+     * hierarchy edges. Repo-bounded; the node cap is {@link Hierarchy#MAX_NODES}.
+     */
+    public Hierarchy.Result subtypesTransitive(Symbol target) {
+        return hierarchy.subtypes(target, Hierarchy.MAX_NODES);
+    }
+
+    /** Test seam: the supertype closure under an explicit node cap (to exercise truncation cheaply). */
+    Hierarchy.Result supertypesTransitive(Symbol target, int maxNodes) {
+        return hierarchy.supertypes(target, maxNodes);
+    }
+
+    /** Test seam: the subtype closure under an explicit node cap (to exercise truncation cheaply). */
+    Hierarchy.Result subtypesTransitive(Symbol target, int maxNodes) {
+        return hierarchy.subtypes(target, maxNodes);
+    }
+
+    /** The graph {@link Symbol} for {@code moniker}, or {@code null} for a phantom/unknown node. */
+    Symbol symbolFor(String moniker) {
+        return symbolByMoniker.get(moniker);
+    }
+
+    /** The {@code EXTENDS}/{@code IMPLEMENTS}/{@code OVERRIDES} edges out of {@code moniker} (supertypes walk). */
+    Set<MonikerEdge> fwdHierarchy(String moniker) {
+        return filterHierarchy(store.fwd(moniker));
+    }
+
+    /** The {@code EXTENDS}/{@code IMPLEMENTS}/{@code OVERRIDES} edges into {@code moniker} (subtypes walk). */
+    Set<MonikerEdge> revHierarchy(String moniker) {
+        return filterHierarchy(store.rev(moniker));
+    }
+
+    /**
+     * Warm {@code s}'s hierarchy neighbourhood for a transitive-walk step: its own file (its outgoing
+     * supertype edges) and the candidate files of its <b>anchor type</b> (the subtype files that name
+     * it — its incoming subtype/overrider edges). For a method target the anchor is the enclosing
+     * type's simple name (an overrider lives in a subtype <em>type</em>, referencing that type, not the
+     * method name); for a type it is the type's own name.
+     */
+    void warmHierarchyNeighborhood(Symbol s) {
+        warmStructural(s.fileId());
+        for (int fid : candidateFiles(anchorName(s))) {
+            warmStructural(fid);
+        }
+    }
+
+    /** A reached node → {@link HierarchyNode}, filling display/site from the symbol caches (external if phantom). */
+    HierarchyNode hierarchyNode(String moniker, int depth, EdgeType via) {
+        Symbol s = symbolByMoniker.get(moniker);
+        String display = signatureOf(moniker);
+        if (s == null || s.isPhantom() || s.range().isNone()) {
+            SymbolKind kind = s == null ? SymbolKind.UNKNOWN : s.kind();
+            return new HierarchyNode(moniker, display, kind, null, -1, depth, via);
+        }
+        return new HierarchyNode(moniker, display, s.kind(), absPathOf(s.fileId()),
+                s.range().startLine(), depth, via);
+    }
+
+    /** The simple name whose candidate files hold {@code s}'s subtypes: its own (type) or its enclosing type's. */
+    private String anchorName(Symbol s) {
+        if (isType(s.kind())) {
+            return s.name();
+        }
+        Symbol enclosing = s.enclosingMoniker() == null ? null : symbolByMoniker.get(s.enclosingMoniker());
+        while (enclosing != null && !isType(enclosing.kind())) {
+            enclosing = enclosing.enclosingMoniker() == null
+                    ? null : symbolByMoniker.get(enclosing.enclosingMoniker());
+        }
+        return enclosing != null ? enclosing.name() : s.name();
+    }
+
+    private static boolean isType(SymbolKind k) {
+        return switch (k) {
+            case CLASS, INTERFACE, ENUM, RECORD, ANNOTATION -> true;
+            default -> false;
+        };
+    }
+
+    private static boolean isHierarchyEdge(EdgeType t) {
+        return t == EdgeType.EXTENDS || t == EdgeType.IMPLEMENTS || t == EdgeType.OVERRIDES;
+    }
+
+    private static Set<MonikerEdge> filterHierarchy(Set<MonikerEdge> edges) {
+        Set<MonikerEdge> out = new HashSet<>();
+        for (MonikerEdge e : edges) {
+            if (isHierarchyEdge(e.type())) {
+                out.add(e);
+            }
+        }
+        return out;
+    }
+
     /** Resolve a single file's structural layer (type/annotation refs + hierarchy) if not already done. */
     private void warmStructural(int fid) {
         if (fid < 0) {
@@ -485,13 +593,7 @@ public final class EdgeResolver implements AutoCloseable {
 
     /** The hierarchy ({@code EXTENDS}/{@code IMPLEMENTS}/{@code OVERRIDES}) edges out of {@code moniker}. */
     public Set<MonikerEdge> hierarchyOut(String moniker) {
-        Set<MonikerEdge> out = new HashSet<>();
-        for (MonikerEdge e : store.fwd(moniker)) {
-            if (e.type() == EdgeType.EXTENDS || e.type() == EdgeType.IMPLEMENTS || e.type() == EdgeType.OVERRIDES) {
-                out.add(e);
-            }
-        }
-        return out;
+        return filterHierarchy(store.fwd(moniker));
     }
 
     /**
@@ -611,7 +713,7 @@ public final class EdgeResolver implements AutoCloseable {
     private static List<MonikerEdge> hierarchyEdges(Set<MonikerEdge> edges) {
         List<MonikerEdge> out = new ArrayList<>();
         for (MonikerEdge e : edges) {
-            if (e.type() == EdgeType.EXTENDS || e.type() == EdgeType.IMPLEMENTS || e.type() == EdgeType.OVERRIDES) {
+            if (isHierarchyEdge(e.type())) {
                 out.add(e);
             }
         }

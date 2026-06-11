@@ -507,6 +507,22 @@ java-lsp/                      (consider renaming, e.g. jcma/)
     take the same shape keyed by the resolved FQN. **Task-10 constraint:** Tier-2 must rebuild a
     project method's moniker from the declaration AST, not from the resolved FQN signature.
     Implemented in `jcma.index.Moniker`.
+- **Transitive type-hierarchy tools — *decided (M2 Task-05)*:** `find_supertypes` + `find_subtypes`
+  (wire names `find_java_supertypes`/`find_java_subtypes`) BFS-walk the direct
+  `EXTENDS`/`IMPLEMENTS`/`OVERRIDES` primitives to the whole closure, warming each node's structural
+  layer lazily as it is dequeued (a subtype file names its supertype, so it is a candidate at every
+  level; a *method* node anchors that warm on its **enclosing type's** name, since an overrider lives
+  in a subtype *type*, not at a call of the method). Each node carries its shortest-hop **depth** + the
+  **`via` edge kind** (`extends → depth 2`), not a full path. **Walk bound = node-count cap, not depth**
+  (real hierarchies are shallow but can fan out): **default 500**, unbounded depth; hitting it sets a
+  `truncated` flag surfaced as a `(truncated at 500)` header marker — the answer is never silently
+  short. (The output-token `BudgetPolicy` cap is separate and still applies.) Cycle-safe via a visited
+  set (Java forbids inheritance cycles, but a stale graph cycle must still terminate). **Two-tool
+  scope:** `find_implementations` is **deferred** — its "concrete only" semantics needs an
+  *abstract-class* filter, but `Symbol.flags` has no abstract bit today (only `INTERFACE`/`ANNOTATION`
+  are distinguishable by `kind`). The follow-up task threads an abstract modifier bit from the engine
+  `Outline` → a `Symbol.flags` bit → the filter, then ships `find_implementations` on top of the same
+  subtype walk.
 - **Observability (cross-cutting) — *decided (M1 Task-06)*:** jcma carries a lightweight, built-in
   metrics layer so tuning decisions are data-driven rather than guessed. A dependency-free,
   native-image-friendly registry (plain atomic counters/timers — *not* Micrometer/Prometheus

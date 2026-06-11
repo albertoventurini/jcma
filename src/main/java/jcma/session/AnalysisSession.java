@@ -17,6 +17,7 @@ import jcma.obs.Metrics;
 import jcma.resolve.Cascade;
 import jcma.resolve.Definition;
 import jcma.resolve.EdgeResolver;
+import jcma.resolve.Hierarchy;
 import jcma.resolve.References;
 import jcma.workspace.FileTable;
 import jcma.workspace.FreshnessGuard;
@@ -227,6 +228,41 @@ public final class AnalysisSession implements AutoCloseable {
     public List<MonikerEdge> subtypes(Symbol target) throws IOException {
         refresh(fileOf(target));
         return resolver.subtypes(target);
+    }
+
+    /** {@code find_supertypes(target)} — the transitive supertype closure (depth + via per node). */
+    public Hierarchy.Result supertypesTransitive(Symbol target) throws IOException {
+        refresh(fileOf(target));
+        return resolver.supertypesTransitive(target);
+    }
+
+    /** {@code find_subtypes(target)} — the transitive subtype/overrider closure (depth + via per node). */
+    public Hierarchy.Result subtypesTransitive(Symbol target) throws IOException {
+        refresh(fileOf(target));
+        return resolver.subtypesTransitive(target);
+    }
+
+    /**
+     * {@code find_supertypes} by use-site position: resolve the occurrence at {@code pos} to its
+     * declaration, map it to an in-store {@link Symbol}, then walk up. An unresolved site or an external
+     * target (no in-store symbol) yields an empty closure.
+     */
+    public Hierarchy.Result supertypesTransitiveAt(Path file, Position pos) throws IOException {
+        Optional<Symbol> target = targetAt(file, pos);
+        return target.isEmpty() ? Hierarchy.Result.empty() : resolver.supertypesTransitive(target.get());
+    }
+
+    /** {@code find_subtypes} by use-site position (see {@link #supertypesTransitiveAt}). */
+    public Hierarchy.Result subtypesTransitiveAt(Path file, Position pos) throws IOException {
+        Optional<Symbol> target = targetAt(file, pos);
+        return target.isEmpty() ? Hierarchy.Result.empty() : resolver.subtypesTransitive(target.get());
+    }
+
+    /** Resolve a position to its declaration's in-store {@link Symbol} (the shared go-to-X mapping). */
+    private Optional<Symbol> targetAt(Path file, Position pos) throws IOException {
+        refresh(file);
+        Optional<Definition> def = resolver.findDefinitionAt(file, pos);
+        return def.isEmpty() ? Optional.empty() : store.symbol(def.get().moniker());
     }
 
     /**
