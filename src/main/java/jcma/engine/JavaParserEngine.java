@@ -236,10 +236,12 @@ public final class JavaParserEngine implements AnalysisEngine {
     }
 
     @Override
-    public List<ResolvedOccurrence> resolveTypeReferences(ParsedUnit unit) {
+    public List<ResolvedOccurrence> resolveTypeReferences(ParsedUnit unit, String simpleName) {
         List<ResolvedOccurrence> out = new ArrayList<>();
         for (Occurrences.Occ o : Occurrences.scan(unit.cu())) {
-            if (o.kind() == OccurrenceKind.TYPE_REF || o.kind() == OccurrenceKind.ANNOTATION) {
+            // Name-scope before .resolve(): only the queried type's use-sites are surfaced (B1).
+            if ((o.kind() == OccurrenceKind.TYPE_REF || o.kind() == OccurrenceKind.ANNOTATION)
+                    && o.targetName().equals(simpleName)) {
                 out.add(attempt(o));
             }
         }

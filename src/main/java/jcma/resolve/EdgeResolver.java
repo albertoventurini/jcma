@@ -78,7 +78,8 @@ public final class EdgeResolver implements AutoCloseable {
     // Tier-2 session state. A file's resolution is accumulated per file in a FileSlice, because
     // store.applyEdit REPLACES the file's whole overlay slice — so writing name X's edges then later
     // name Y's would wipe X's. The slice holds the Tier-1 base + the union of every resolved layer
-    // (per-name value edges + the once-per-file structural edges) and is re-applied as that union.
+    // (per-name value edges + per-name type-ref edges + the once-per-file hierarchy edges) and is
+    // re-applied as that union.
     private final Map<Integer, FileSlice> slices = new HashMap<>();
     private final Map<Path, List<String>> lineCache = new HashMap<>();
 
@@ -92,11 +93,12 @@ public final class EdgeResolver implements AutoCloseable {
     private final StructuralParser overlayParser = new StructuralParser();
 
     /**
-     * Per-file Tier-2 accumulation (the cache unit is now {@code (file, name)} for value edges, and
-     * {@code file} for the name-independent structural layer). {@code names} records which value-name
-     * layers are resolved; {@code structural} whether the type/annotation + hierarchy layer is. The
-     * applied {@link FileIndex} is the union of {@link #base} (Tier-1) + {@link #valueEdges} (all
-     * resolved names) + {@link #structuralEdges}.
+     * Per-file Tier-2 accumulation. The cache unit is {@code (file, name)} for <em>both</em> the value
+     * layer and the type-ref layer (B1), and {@code file} for the name-independent hierarchy layer.
+     * {@code names} records which value-name layers are resolved; {@code typeRefNames} which type-ref
+     * name layers are (the symmetric mirror); {@code hierarchy} whether the once-per-file hierarchy
+     * layer is. The applied {@link FileIndex} is the union of {@link #base} (Tier-1) + {@link
+     * #valueEdges} (all resolved names) + {@link #structuralEdges} (type-ref + hierarchy edges).
      */
     private static final class FileSlice {
         final List<Symbol> symbols;           // Tier-1 declarations
@@ -104,8 +106,9 @@ public final class EdgeResolver implements AutoCloseable {
         final List<TextUnit> texts;           // Tier-1 D2 text units (re-emitted so Tier-2 doesn't drop them)
         final Set<String> names = new HashSet<>();              // value-name layers resolved
         final List<MonikerEdge> valueEdges = new ArrayList<>(); // accumulated across names
-        boolean structural;                   // type/annotation refs + hierarchy resolved (once/file)
-        final List<MonikerEdge> structuralEdges = new ArrayList<>();
+        final Set<String> typeRefNames = new HashSet<>();       // type-ref name layers resolved (B1)
+        boolean hierarchy;                    // EXTENDS/IMPLEMENTS/OVERRIDES resolved (once/file)
+        final List<MonikerEdge> structuralEdges = new ArrayList<>(); // type-ref + hierarchy edges
 
         FileSlice(List<Symbol> symbols, List<MonikerEdge> base, List<TextUnit> texts) {
             this.symbols = symbols;
@@ -229,10 +232,11 @@ public final class EdgeResolver implements AutoCloseable {
     /**
      * Resolve every candidate file for {@code simpleName} (Option A — name-scoped). For each, resolve
      * the per-(file,name) <b>value layer</b> (the queried name's calls/reads — the cubic-cost class,
-     * bucketing its misses onto the {@code name~UNRESOLVED} placeholder) and the once-per-file
-     * <b>structural layer</b> (type/annotation refs + hierarchy). The cache unit is now {@code (file,
-     * name)} for the value layer and {@code file} for the structural layer — a same-name repeat
-     * re-resolves nothing.
+     * bucketing its misses onto the {@code name~UNRESOLVED} placeholder) and the per-(file,name)
+     * <b>type-ref layer</b> (the queried type's type/annotation use-sites). The cache unit is {@code
+     * (file, name)} for both — a same-name repeat re-resolves nothing. The hierarchy layer is <b>not</b>
+     * resolved here: {@code find_references} never reads it (B0), so it is left to the hierarchy-query
+     * path ({@link #warmHierarchy}).
      *
      * <p>The candidate set is {@link UsageNameIndex#candidateFiles} — an <b>exact</b> simple-name match,
      * so every true use-site of {@code simpleName} is in a candidate file, and the per-name tail is
@@ -308,9 +312,11 @@ public final class EdgeResolver implements AutoCloseable {
     }
 
     /**
-     * Warm {@code fid} for a {@code find_references(simpleName)} query: resolve the value layer for
-     * {@code simpleName} and the structural layer (each at most once), accumulating into the file's
-     * slice and re-applying the union. Both layers share one {@code engine.parse} when both are needed.
+     * Warm {@code fid} for a {@code find_references(simpleName)} query: resolve the value layer and the
+     * type-ref layer for {@code simpleName} (each at most once per {@code (file, name)}), accumulating
+     * into the file's slice and re-applying the union. Both layers share one {@code engine.parse} when
+     * both are needed. The hierarchy layer is never touched here (B0 — {@code find_references} does not
+     * read it).
      */
     private void warmForReferences(int fid, String simpleName) {
         Path path = absPathOf(fid);
@@ -320,13 +326,13 @@ public final class EdgeResolver implements AutoCloseable {
         try {
             FileSlice slice = sliceFor(fid, path);
             boolean needValue = !slice.names.contains(simpleName);
-            boolean needStructural = !slice.structural;
-            if (!needValue && !needStructural) {
-                return; // (file, name) value layer + structural layer both cached
+            boolean needTypeRefs = !slice.typeRefNames.contains(simpleName);
+            if (!needValue && !needTypeRefs) {
+                return; // (file, name) value + type-ref layers both cached
             }
             ParsedUnit unit = engine.parse(path);
-            if (needStructural) {
-                resolveStructuralInto(slice, fid, unit);
+            if (needTypeRefs) {
+                resolveTypeRefsInto(slice, fid, unit, simpleName);
             }
             if (needValue) {
                 resolveValueInto(slice, fid, unit, simpleName);
@@ -365,16 +371,31 @@ public final class EdgeResolver implements AutoCloseable {
     }
 
     /**
-     * Resolve the once-per-file structural layer into {@code slice}: the type/annotation references
-     * (the cheap, name-independent dependency layer the cascade walks) and the hierarchy edges (task-11a
-     * EXTENDS/IMPLEMENTS from a type, OVERRIDES from a method). Marks {@code structural} resolved.
+     * Resolve the per-(file,name) type-ref layer for {@code simpleName} into {@code slice}: the
+     * type/annotation use-sites naming {@code simpleName} (the cheap type-solver layer the cascade
+     * walks). Marks the name resolved even on a zero-edge result, so a repeat is a no-op. {@code
+     * resolve.typerefs} isolates the per-name type-ref work (so B1's scoping win is measurable);
+     * {@code resolve.occurrences} is the all-kinds total.
      */
-    private void resolveStructuralInto(FileSlice slice, int fid, ParsedUnit unit) {
-        slice.structural = true;
-        for (ResolvedOccurrence o : engine.resolveTypeReferences(unit)) {
+    private void resolveTypeRefsInto(FileSlice slice, int fid, ParsedUnit unit, String simpleName) {
+        slice.typeRefNames.add(simpleName);
+        for (ResolvedOccurrence o : engine.resolveTypeReferences(unit, simpleName)) {
             metrics.counter("resolve.occurrences").add(1);
+            metrics.counter("resolve.typerefs").add(1);
             addOccurrenceEdge(fid, o, slice.structuralEdges);
         }
+    }
+
+    /**
+     * Resolve the once-per-file hierarchy layer into {@code slice}: the {@code EXTENDS}/{@code
+     * IMPLEMENTS} edges from a type and {@code OVERRIDES} edges from a method (task-11a). Name-independent
+     * — guarded by {@code slice.hierarchy} so it runs at most once per file.
+     */
+    private void resolveHierarchyInto(FileSlice slice, int fid, ParsedUnit unit) {
+        if (slice.hierarchy) {
+            return;
+        }
+        slice.hierarchy = true;
         // src = the enclosing declaration's moniker (its name position); dst = the supertype/overridden
         // member, or a phantom for external (jar/JDK) targets.
         for (ResolvedHierarchy h : engine.resolveHierarchy(unit)) {
@@ -437,7 +458,7 @@ public final class EdgeResolver implements AutoCloseable {
     }
 
     /**
-     * Resolve the <b>structural layer</b> of {@code target}'s own file (its outgoing hierarchy) and of
+     * Resolve the <b>hierarchy layer</b> of {@code target}'s own file (its outgoing hierarchy) and of
      * the incoming-hierarchy candidate files — the subtypes/overriders. A subtype names its supertype
      * <em>type</em>, so the candidate files are those naming {@code target}'s <b>anchor type</b> (its
      * own name for a type, its enclosing type's name for a method), <b>not</b> {@code target.name()}:
@@ -445,8 +466,8 @@ public final class EdgeResolver implements AutoCloseable {
      * keying on the method name misses every overrider on a cold query. This is exactly the warm the
      * transitive walker does per step, so the single-hop primitive shares {@link
      * #warmHierarchyNeighborhood}. Hierarchy is name-independent, so this resolves <em>only</em> the
-     * structural layer — it does not drag in the value-name resolution {@code find_references} needs
-     * (and vice-versa).
+     * hierarchy layer — it does not drag in the type-ref or value-name resolution {@code
+     * find_references} needs (B0/B1), and vice-versa.
      */
     private void ensureHierarchyResolved(Symbol target) {
         warmHierarchyNeighborhood(target);
@@ -506,9 +527,9 @@ public final class EdgeResolver implements AutoCloseable {
      * method name); for a type it is the type's own name.
      */
     void warmHierarchyNeighborhood(Symbol s) {
-        warmStructural(s.fileId());
+        warmHierarchy(s.fileId());
         for (int fid : candidateFiles(anchorName(s))) {
-            warmStructural(fid);
+            warmHierarchy(fid);
         }
     }
 
@@ -558,8 +579,8 @@ public final class EdgeResolver implements AutoCloseable {
         return out;
     }
 
-    /** Resolve a single file's structural layer (type/annotation refs + hierarchy) if not already done. */
-    private void warmStructural(int fid) {
+    /** Resolve a single file's hierarchy layer if not already done (no type-refs — B1's symmetric half). */
+    private void warmHierarchy(int fid) {
         if (fid < 0) {
             return;
         }
@@ -569,10 +590,10 @@ public final class EdgeResolver implements AutoCloseable {
         }
         try {
             FileSlice slice = sliceFor(fid, path);
-            if (slice.structural) {
+            if (slice.hierarchy) {
                 return;
             }
-            resolveStructuralInto(slice, fid, engine.parse(path));
+            resolveHierarchyInto(slice, fid, engine.parse(path));
             store.applyEdit(slice.toIndex(fid));
             metrics.counter("resolve.files").add(1);
         } catch (IOException skip) {
@@ -621,14 +642,16 @@ public final class EdgeResolver implements AutoCloseable {
     /**
      * Eagerly (re-)resolve {@code fileId} into the graph from current bytes — the changed file is
      * resolved as part of the cascade so its new structural edges (hierarchy + type refs) become
-     * visible for the diff. <b>Always</b> resolves the structural layer (even if the file was never
-     * warm — a freshly-edited supertype must surface its new EXTENDS edge), and re-resolves the value
-     * layer for every name previously warm for the file. Discards the old slice first, so stale edges
-     * are not carried. Leaves the file <b>warm</b>.
+     * visible for the diff. <b>Always</b> resolves the hierarchy layer whole-file (even if the file was
+     * never warm — a freshly-edited supertype must surface its new EXTENDS edge, which feeds the
+     * cascade's hierarchy diff), and re-resolves the value <em>and</em> type-ref layers for every name
+     * previously warm for the file (mirroring the per-name cache — no whole-file type-ref pass).
+     * Discards the old slice first, so stale edges are not carried. Leaves the file <b>warm</b>.
      */
     public void reResolve(int fileId) {
         FileSlice old = slices.remove(fileId);
         Set<String> names = old == null ? Set.of() : new HashSet<>(old.names);
+        Set<String> typeRefNames = old == null ? Set.of() : new HashSet<>(old.typeRefNames);
         Path path = absPathOf(fileId);
         if (path == null || !Files.isRegularFile(path)) {
             return;
@@ -636,7 +659,10 @@ public final class EdgeResolver implements AutoCloseable {
         try {
             FileSlice slice = sliceFor(fileId, path);
             ParsedUnit unit = engine.parse(path);
-            resolveStructuralInto(slice, fileId, unit);
+            resolveHierarchyInto(slice, fileId, unit);
+            for (String name : typeRefNames) {
+                resolveTypeRefsInto(slice, fileId, unit, name);
+            }
             for (String name : names) {
                 resolveValueInto(slice, fileId, unit, name);
             }
@@ -667,10 +693,19 @@ public final class EdgeResolver implements AutoCloseable {
      * unresolved (M1 task-11c). For each changed moniker, {@code rev(moniker)} gives the confirmed
      * referrers (excluding the structural {@code CONTAINS} edge); for each changed simple name,
      * {@code rev(name~UNRESOLVED)} gives the unconfirmed referrers (so a newly-defined name re-binds).
-     * Only files <b>warm</b> in this session are dropped (any {@code (file, *)} layer warm counts — a
+     *
+     * <p><b>Type-ref reachability (B1):</b> since type-refs are name-scoped, {@code rev(type)} is
+     * <em>partial</em> — a file warm for {@code find_references(X)} resolved only {@code X}'s type-refs,
+     * so its type-ref to a <em>different</em> changed type was never written as an edge. The complete,
+     * name-independent source of "files referencing simple name {@code N}" is the usage-name {@link
+     * #candidateFiles} set (the very set {@code find_references} prunes to). So for each changed
+     * <b>type</b> moniker and each changed name we also fold in its candidate files — restoring the
+     * reverse-completeness whole-file type-ref resolution used to give the cascade, sourced from the
+     * usage index instead.
+     *
+     * <p>Only files <b>warm</b> in this session are dropped (any {@code (file, *)} layer warm counts — a
      * non-warm referrer re-resolves lazily on first touch anyway); {@code exclude} skips the
-     * just-re-resolved changed files. Returns the set of
-     * referrer files actually returned to unresolved.
+     * just-re-resolved changed files. Returns the set of referrer files actually returned to unresolved.
      */
     public Set<Path> invalidateReferrers(Set<String> changedMonikers, Set<String> changedNames,
             Set<Integer> exclude) throws IOException {
@@ -681,11 +716,21 @@ public final class EdgeResolver implements AutoCloseable {
                     addReferrer(referrers, e);
                 }
             }
+            // A changed type's referrers reach it by a (now name-scoped) type-ref that rev(type) may
+            // not hold — fold in the type-name's candidate files to close that gap.
+            Symbol s = symbolByMoniker.get(moniker);
+            if (s != null && isType(s.kind())) {
+                referrers.addAll(candidateFiles(s.name()));
+            }
         }
         for (String name : changedNames) {
             for (MonikerEdge e : store.rev(name + UNRESOLVED_SUFFIX)) {
                 addReferrer(referrers, e);
             }
+            // A referrer whose name-scoped type-ref to `name` was never resolved (e.g. a newly-defined
+            // type whose prior use-site was never queried) has no rev(name~UNRESOLVED) edge — its
+            // candidate files close that gap so it re-binds on the next touch.
+            referrers.addAll(candidateFiles(name));
         }
         referrers.removeAll(exclude);
 

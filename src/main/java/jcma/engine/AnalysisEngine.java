@@ -42,13 +42,16 @@ public interface AnalysisEngine {
     List<ResolvedOccurrence> resolveOccurrences(ParsedUnit unit, String simpleName);
 
     /**
-     * Resolve every <b>type/annotation</b> use-site in {@code unit} (the name-independent structural
-     * layer). These resolve through the type solver, <em>not</em> the cubic {@code StatementContext}
-     * walk, so they are cheap and resolved once per file regardless of the queried name. They are the
-     * per-file dependency layer the node-diff cascade walks (task-11c): a referrer's {@code REFERENCES}
-     * edge to a type is how a change to that type finds its referrers. Each resolution is guarded.
+     * Resolve the <b>type/annotation</b> use-sites in {@code unit} whose simple name equals {@code
+     * simpleName} (B1 name-scoping — symmetric to {@link #resolveOccurrences}). These resolve through
+     * the type solver, <em>not</em> the cubic {@code StatementContext} walk, so each is cheap; scoping
+     * to the queried name keeps {@code find_references(Type)} from resolving every other type-ref in the
+     * file just to surface the few that match. The cache unit is therefore {@code (file, name)}, not the
+     * whole file. These are the per-file dependency layer the node-diff cascade walks (task-11c): a
+     * referrer's {@code REFERENCES} edge to a type is how a change to that type finds its referrers.
+     * Each resolution is guarded.
      */
-    List<ResolvedOccurrence> resolveTypeReferences(ParsedUnit unit);
+    List<ResolvedOccurrence> resolveTypeReferences(ParsedUnit unit, String simpleName);
 
     /**
      * Resolve the <em>structural hierarchy</em> of every declaration in {@code unit} (task-11a): for

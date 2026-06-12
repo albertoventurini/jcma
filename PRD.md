@@ -158,8 +158,11 @@ graph-DB engine), a **graph-shaped, general-purpose data model**, relationships 
   signatures, *unresolved* occurrences) + a name index. Serves `search_symbols`, `outline`,
   definition-by-name cheaply.
 - **Tier 2 — resolved-edge cache**: precise relationships (references/calls/overrides/…)
-  resolved by SymbolSolver **on demand, at file granularity, then cached** — never fully
-  precomputed up front, never recomputed per query.
+  resolved by SymbolSolver **on demand, then cached** — never fully precomputed up front, never
+  recomputed per query. The cache unit is **`(file, name)`** for the value layer (calls/reads) and
+  the type-ref layer (type/annotation uses) — a query resolves only the *queried name's* edges in a
+  candidate file, not every edge in it — and **`file`** for the name-independent hierarchy layer
+  (`EXTENDS`/`IMPLEMENTS`/`OVERRIDES`), resolved once and only when a hierarchy query asks.
 
 **Full-text segment (`text.seg`) — the coverage floor under `grep_java` (M3).** A third token
 source indexing **string literals, comments, and Javadoc** so `grep_java` has no "wasn't-a-symbol"
@@ -216,24 +219,29 @@ segments into IDE search. It also colocates with the existing JDK-signature cach
 resolver is `jcma.workspace.IndexLayout`.
 
 ### Lazy-resolve-and-cache — reverse edges are a *byproduct* of forward resolution
-The unit of resolution is a **file's occurrences, not a symbol** — so we never do a
-per-symbol whole-repo scan for incoming edges. Resolving one use-site U→D yields **both**
-the forward edge `U→D` and the reverse edge `D←U` in the same operation; resolving file F
-populates F's outgoing edges *and* contributes incoming edges to every declaration F touches.
+The unit of resolution is a **`(file, name)`, not a symbol and not a whole file** — so we never do
+a per-symbol whole-repo scan for incoming edges, *nor* resolve a file's every edge to answer about
+one name. Resolving one use-site U→D yields **both** the forward edge `U→D` and the reverse edge
+`D←U` in the same operation; resolving the queried name in file F populates F's outgoing edges *for
+that name* and contributes the corresponding incoming edges.
 
 - **Index time:** parse-only — records *unresolved* occurrences (use-site + syntactic target
   name + lexical context). No SymbolSolver.
 - **First `find_references(X)`:** use the **usage exact-match index to prune to candidates** =
   only files containing a use of X's exact simple name (a small fraction of the repo, *not* the
-  whole project); resolve those candidates (bounded pool, cancellable); cache forward+reverse edges.
-  Paid once; resolving those files also warms reverse edges for every other symbol they touch.
-  Later queries in that neighborhood are pure lookups.
+  whole project); in each, resolve **only X's** value + type-ref use-sites (name-scoped — resolving
+  every other type-ref just to surface X's was the dominant cold cost on large repos), caching
+  forward+reverse edges. The **hierarchy layer is not touched** — `find_references` never reads it.
+  Later `find_references(X)` queries in that neighborhood are pure lookups.
+- **First `find_supertypes/subtypes(X)`:** resolves the **hierarchy layer only** of X's
+  neighbourhood (its file + the candidate files naming its anchor type), never the type-ref layer.
 - *(Optional)* an instant **"candidate references"** answer (syntactic name-match, unresolved)
   upgradable to **"confirmed"** as background resolution completes, under a time budget.
 
 So "store both directions" describes the cache's *structure*; both directions are populated
-**together, lazily**. The reverse direction for X becomes *complete* once its name-candidate
-files are resolved — which the first reverse query triggers and caches until they change.
+**together, lazily**. Because type-refs are name-scoped, `rev(type)` is only as complete as the
+names queried so far — so the **cascade** (§"Invalidation") sources a changed type's referrers from
+the name-independent **usage-name candidate index**, not from the partial reverse type-ref edges.
 
 ### Freshness & incrementality — filesystem-driven (no document-sync)
 MCP is request/response: there is **no client push channel**. And even LSP's `didChange` would
@@ -295,6 +303,9 @@ Task-09 for the full producer/backstop analysis.)
   changed file diffs its old vs new node set; for each **removed / signature-changed** node, walk its
   reverse edges to the *exact* referrers and return them to **unresolved** (they re-resolve lazily on
   next access). The graph already records who depends on what — we walk it instead of guessing.
+  *(One exception: type-refs are name-scoped (§5.1), so `rev(type)` is partial — a changed **type**'s
+  referrers are sourced from the type-name's usage-name candidate set, which is complete and
+  name-independent. Still exact-not-lexical; only warm files are returned to unresolved.)*
 - **Completeness requires modeling the non-lexical dependencies too:** the type hierarchy
   (`EXTENDS`/`IMPLEMENTS`/`OVERRIDES`) and **unconfirmed references** are first-class edges, so
   supertype edits and newly-satisfiable lookups cascade by the same reverse-edge walk. An unconfirmed

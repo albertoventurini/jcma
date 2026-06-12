@@ -25,11 +25,12 @@ import org.junit.jupiter.api.io.TempDir;
  *   <li>{@code Ext extends java.util.ArrayList} — the external supertype → <b>phantom</b> {@code dst};</li>
  * </ul>
  *
- * <p>Resolution is Tier-2 lazy: a {@code find_references} on the simple name {@code Base} (used in both
- * {@code Sub} and {@code Ext}) warms those files, so resolving them must emit the hierarchy edges as a
- * side effect — alongside the reference edges, in the same {@code applyEdit}. The assertions then read
- * the edges straight back from the persisted {@link LsmStore} (the {@code find_subtypes} primitive is
- * literally {@code store.rev(type)}), which also proves they survive a reopen and a compaction.
+ * <p>Resolution is Tier-2 lazy: a {@code subtypes(Base)}/{@code subtypes(Iface)} hierarchy query warms
+ * the hierarchy layer of the candidate subtype files ({@code Sub}, {@code Ext}, which name {@code Base}),
+ * emitting the hierarchy edges in the same {@code applyEdit}. (Since the B0/B1 split, {@code
+ * find_references} no longer resolves the hierarchy layer — only a hierarchy query does.) The assertions
+ * then read the edges straight back from the persisted {@link LsmStore} (the {@code find_subtypes}
+ * primitive is literally {@code store.rev(type)}), which also proves they survive a reopen and a compaction.
  *
  * <p><b>Edge-type convention (decided with the user):</b> by keyword — {@code extends}→EXTENDS,
  * {@code implements}→IMPLEMENTS. OVERRIDES is <b>direct</b> and includes interface-method
@@ -137,14 +138,14 @@ class HierarchyEdgesTest {
 
     // ------------------------------------------------------------------ helpers
 
-    /** Trigger Tier-2 resolution of the subtype files via the {@code Base}/{@code Iface} simple names. */
+    /** Trigger Tier-2 hierarchy resolution of the subtype files via the {@code Base}/{@code Iface} hierarchy queries. */
     private static void warm(Path indexDir) throws Exception {
         try (EdgeResolver resolver = EdgeResolver.open(indexDir, Workspace.ofSourceRoot(HIER), Metrics.create())) {
             for (Symbol s : resolver.declarations("Base")) {
-                resolver.findReferences(s);
+                resolver.subtypes(s);
             }
             for (Symbol s : resolver.declarations("Iface")) {
-                resolver.findReferences(s);
+                resolver.subtypes(s);
             }
         }
     }
