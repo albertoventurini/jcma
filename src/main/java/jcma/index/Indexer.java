@@ -126,7 +126,9 @@ public final class Indexer {
     }
 
     /**
-     * Parse-extract a set of files in parallel across virtual threads (ported from M0 {@code SpikeB}).
+     * Parse-extract a set of files in parallel across a fixed platform-thread pool sized to the
+     * available core count (ported from M0 {@code SpikeB}; parsing is CPU-bound, so cores — not a
+     * per-task virtual thread — is the right degree of parallelism, and the pool bounds in-flight ASTs).
      * Each {@link ParseRequest} carries the (caller-assigned, stable) file id and source-set tag, so
      * both the cold {@link #indexRepo} pass and the warm {@code Reconciler} reuse one parse engine. The
      * returned {@link FileIndex} list is positionally aligned with {@code requests} (a {@code null}
@@ -135,7 +137,7 @@ public final class Indexer {
     public ParseResult parseAll(List<ParseRequest> requests) throws IOException {
         List<FileIndex> extracted = new ArrayList<>(requests.size());
         AtomicLong loc = new AtomicLong();
-        try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (ExecutorService pool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors())) {
             List<Future<FileIndex>> futures = new ArrayList<>(requests.size());
             for (ParseRequest req : requests) {
                 futures.add(pool.submit(() -> {

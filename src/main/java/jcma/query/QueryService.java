@@ -54,7 +54,7 @@ public final class QueryService implements AutoCloseable {
 
     public QueryService(AnalysisSession session) {
         this.session = session;
-        ThreadFactory factory = Thread.ofVirtual().name("jcma-query-", 0).factory();
+        ThreadFactory factory = Thread.ofPlatform().name("jcma-query-", 0).factory();
         this.worker = Executors.newSingleThreadExecutor(factory);
     }
 
