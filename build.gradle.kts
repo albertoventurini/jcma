@@ -250,12 +250,12 @@ tasks.register("jdkResolveSmoke") {
     doLast {
         val binary = layout.buildDirectory.file("native/nativeCompile/jcma").get().asFile
         require(binary.exists()) { "native binary missing (run nativeCompile): $binary" }
-        // A jcma source file with a JDK-typed call — Main.java:43 `out.println("jcma " + VERSION);`,
+        // A jcma source file with a JDK-typed call — Main.java:51 `out.println("jcma " + VERSION);`,
         // `println` token at column 21 (the dogfood action that originally surfaced the gap).
         val src = file("src/main/java/jcma/cli/Main.java")
         require(src.exists()) { "jcma source file missing: $src" }
 
-        val proc = ProcessBuilder(binary.absolutePath, "resolve", src.absolutePath, "43:21")
+        val proc = ProcessBuilder(binary.absolutePath, "resolve", src.absolutePath, "51:21")
             .directory(projectDir)
             .redirectErrorStream(true)
             .start()
