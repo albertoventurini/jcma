@@ -2,7 +2,9 @@
 
 > **Status: B0+B1 DONE (2026-06-12, commit `b028fb6` on `main`); parse/resolve split now MEASURED
 > (2026-06-12, see "Measured" section below) — the data reorders the next levers (Tier-1 re-parse
-> elimination first; parse cache + parallel resolve after).** This is the record of the structural-layer split, its
+> elimination first; parse cache + parallel resolve after). Direction A (parallel resolve) was BUILT
+> AND REVERTED 2026-06-13 — it is silent-wrong on real codebases; see "Direction A — reverted" at the
+> end. Parallel resolve is now a CLOSED door, not a pending lever.** This is the record of the structural-layer split, its
 > measured (modest) cold-`find_references` win on Spring, *why* it's modest, and the design for the
 > parse cache that the residual cost points to. Companion to
 > [`find-references-cold-resolution-perf.md`](find-references-cold-resolution-perf.md), which calls
@@ -245,3 +247,60 @@ cache already collapses Tier-1 across queries). So:
 > already flips `getBean` to 4073 confirmed / 498 tail; single-module repos (commons-lang) were always
 > fine because their root `src/main/java` exists. Hermetic by design — no build tool runs at index time;
 > deriving roots from the evaluated Gradle/Maven model stays a possible future *query-time-only* layer.
+
+## Direction A — built, then reverted (2026-06-13): parallel resolve is silent-wrong on real code
+
+Lever 3 (gated parallel resolve for `find_references`) was implemented as designed — conservative
+per-shard variant, producer/consumer with a single-writer consumer, `seedFacade()` static-facade
+mitigation, K forked engines, candidate-count gate — green on a unit fixture, and **reverted the same
+day** (commit reverted on `main`). It violates jcma's #1 contract ("never silent-wrong", PRD §4). Keep
+this as a closed door: the verdict is correctness, not tuning, so don't re-open it without a *different*
+architecture (see below).
+
+**The kill shot (commons-lang, 190K LOC, `find_references(isEmpty)`, 62 candidate files):**
+
+| path | confirmed (repeated runs) |
+|---|---|
+| serial | 224, 224, 224 — deterministic |
+| parallel K=4 | 227, 223, 229, 222 — **non-deterministic** |
+
+Every run has the same 259 candidate occurrences, but the **resolved-vs-unconfirmed split races**: a
+use-site lands in the confirmed set on one run and the unconfirmed tail on the next, by thread
+interleaving — sometimes *more* confirmed than serial, sometimes *fewer*. Serial (224) is ground truth.
+This is exactly the silent-wrong mode the safe-degrade net misses: a corrupted resolution returns a
+wrong answer **without throwing**.
+
+**Why `seedFacade` didn't save it, and why the unit stress test gave false confidence.** The mitigation
+seeds each fork's *top-level* `JavaParserFacade` key single-threaded. But (a) `JavaParserFacade.get()` is
+backed by a static `WeakHashMap`, and `WeakHashMap.get()` itself mutates internal state (it expunges
+stale entries on read), so even concurrent *reads* across forks corrupt it; and (b) deep resolution
+calls `get()` with *other* solver keys the seed never covered. The `parallelResolveStress` fixture (15
+trivial files, no real cross-file closure) never exercised enough shared resolution to trip the race —
+so it stayed green and *looked* safe. **Lesson: a concurrency stress test on a toy fixture proves
+nothing; it must run on a real dependency closure (commons-lang-scale minimum).**
+
+**And it isn't even needed on normal codebases.** The whole premise was the Spring `getBean` 47s
+deadline blow-out. But that is a 1.5M-LOC multi-module outlier. On commons-lang (190K LOC, top of the
+typical 10K–100K range) the *heaviest* `find_references` finishes well under the 30s deadline serially,
+and parallel is *slower* (the closure is too small to repay fork/seed/cold-cache overhead):
+
+| query | files | serial | K=4 |
+|---|---|---|---|
+| requireNonNull | 76 | 9.4s | 12.0s (+28%) |
+| equals | 68 | 10.3s | 13.1s (+27%) |
+| isEmpty | 62 | 10.5s | 10.8s |
+
+So parallel resolve: **incorrect** where it engages, **slower** on the codebases that actually exist,
+and only ever "wins" (−25%, still over deadline) on the Spring-scale outlier — where it is *also*
+silent-wrong. Net negative. Reverted.
+
+**What this closes, and what it doesn't.**
+- **Pooling forked engines across queries** — dead for correctness too: it changes engine *lifetime*,
+  but you still resolve on K concurrent forks, so the same race fires. It was only ever a perf play.
+- **Shared bounded concurrent `Cache` (PR #3343)** — the *only* route that could make parallel both fast
+  and correct, because it forces you to confront thread-safe resolution head-on (custom concurrent cache
+  + a proof that concurrent resolution against shared CUs can't corrupt per-node/facade state + a
+  closure-scale stress test). Given normal codebases don't need parallel at all, that ROI is not there.
+- **Serial `find_references` is the answer for the 10K–100K-LOC reality** — correct and already under
+  deadline. If Spring-scale latency is ever a real priority, spend the budget on the *proven-safe*
+  levers (Tier-1 read-back already shipped; the semantic parse cache) — not on re-parallelizing.
