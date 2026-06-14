@@ -28,6 +28,19 @@ jcma refs <symbol>                   # one-shot CLI queries: refs / def / supert
 ```
 Point an MCP client at the binary with `serve` (see [`.mcp.json`](.mcp.json) for the wiring).
 
+## Install as a Claude Code plugin
+The plugin contributes only the MCP-server wiring — you supply the binary (LSP-server model;
+auto-download is not yet available).
+
+1. **Get the binary.** Download the `jcma` native image for your platform and put it on `PATH`
+   (or set `JCMA_BINARY=/full/path/to/jcma`). To build it yourself: `./build-native-image.sh`.
+2. **Index once per repo:** `jcma index .` (`serve` needs an existing index).
+3. **Install in Claude Code:**
+   ```
+   /plugin marketplace add albertoventurini/jcma
+   /plugin install jcma@jcma
+   ```
+
 ## Status
 The core is built and green through **M3**: M0 returned **GO** on the JavaParser → native-image
 bet (all gates passed — see [`milestones/M0-RESULTS.md`](milestones/M0-RESULTS.md)); M1 built the

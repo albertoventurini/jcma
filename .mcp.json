@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "jcma": {
+      "type": "stdio",
+      "command": "${JCMA_BINARY:-jcma}",
+      "args": ["-C", "${CLAUDE_PROJECT_DIR}", "serve"],
+      "env": {}
+    }
+  }
+}

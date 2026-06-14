@@ -1,0 +1,8 @@
+{
+  "name": "jcma",
+  "description": "Agent-native Java code-intelligence over MCP: semantic find-definition / find-references / type-hierarchy / symbol search / grep for Java sources.",
+  "version": "0.1.0",
+  "author": { "name": "Alberto Venturini", "email": "aventurini@gmail.com" },
+  "homepage": "https://github.com/albertoventurini/jcma",
+  "repository": "https://github.com/albertoventurini/jcma"
+}

@@ -1,0 +1,11 @@
+{
+  "name": "jcma",
+  "owner": { "name": "Alberto Venturini", "email": "aventurini@gmail.com" },
+  "plugins": [
+    {
+      "name": "jcma",
+      "source": "./",
+      "description": "Agent-native Java code-intelligence over MCP (download the jcma native binary separately)."
+    }
+  ]
+}
