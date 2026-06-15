@@ -20,7 +20,7 @@ import java.util.Optional;
 public final class Main {
 
     /** Bumped manually; surfaced by {@code jcma version}, the MCP {@code serverInfo}, and the native smoke. */
-    public static final String VERSION = "0.1.0-SNAPSHOT";
+    public static final String VERSION = "0.1.0";
 
     private Main() {}
 

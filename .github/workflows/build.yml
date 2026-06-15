@@ -41,3 +41,22 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: build/native/nativeCompile/jcma
+
+  # The JVM fallback distribution (bin/jcma + bin/jcma.bat + lib/*.jar) — a portable artifact for
+  # platforms without a native binary. The release workflow attaches this to published releases.
+  jvm-dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: 'gradle'
+      - name: Build JVM distribution
+        run: ./gradlew distZip --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jcma-jvm
+          path: build/distributions/*.zip

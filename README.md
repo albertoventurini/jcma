@@ -1,18 +1,18 @@
-# jcma — Java Code-Map for Agents
+# jcma — Java Code Map for Agents
 
 jcma is a Java (JDK 25+) code-intelligence engine built primarily for AI
 coding agents.
 
-It exposes semantic navigation of a Java codebase as a set of MCP tools.
+It exposes semantic navigation of a Java code base as a set of MCP tools.
 The main design principles are:
 
 - fast to start: GraalVM native image, no JVM warm-up
 - fast to answer: index read straight from mmap via FFM, no deserialization; lazy resolve-and-cache; incremental LSM updates
 - gentle on memory: aims to beat the standard Java LSP server, `jdt-ls`
-- precise: full type resolution, no heuristics à la Tree-sitter
+- precise: full type resolution (no heuristics à la Tree-sitter)
 - token-conservative
 
-Under the hood it's **JavaParser + JavaSymbolSolver**, compiled to a **GraalVM native
+Under the hood it uses **JavaParser + JavaSymbolSolver**, compiled to a **GraalVM native
 image** — one lightweight binary that starts instantly and serves from a memory-mapped index
 whose footprint scales with what the agent asks, not with how big the repo is.
 
@@ -37,11 +37,15 @@ jcma refs <symbol>                   # one-shot CLI queries: refs / def / supert
 Point an MCP client at the binary with `serve` (see [`.mcp.json`](.mcp.json) for the wiring).
 
 ## Install as a Claude Code plugin
-The plugin contributes only the MCP-server wiring — you supply the binary (LSP-server model;
-auto-download is not yet available).
+You can install `jcma` as a Claude Code plugin.
+The plugin contributes the MCP-server wiring, but you need to download the binary manually;
+auto-download is not yet available.
 
-1. **Get the binary.** Download the `jcma` native image for your platform and put it on `PATH`
+1. **Get the binary.** Download the `jcma` native image for your platform from the
+   [latest release](https://github.com/albertoventurini/jcma/releases/latest) and put it on `PATH`
    (or set `JCMA_BINARY=/full/path/to/jcma`). To build it yourself: `./build-native-image.sh`.
+   On platforms without a native build, use the `jcma-jvm.zip` fallback from the same release —
+   unzip it and run `bin/jcma` (or `bin\jcma.bat` on Windows); it needs a JDK 25+ on `PATH`.
 2. **Index once per repo:** `jcma index .` (`serve` needs an existing index).
 3. **Install in Claude Code:**
    ```

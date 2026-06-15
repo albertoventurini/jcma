@@ -34,7 +34,7 @@ class MainTest {
     void versionPrintsVersionAndExitsZero() {
         Run r = dispatch("version");
         assertEquals(0, r.exit(), "version should exit 0");
-        // Prints a semver-ish line (e.g. "jcma 0.1.0-SNAPSHOT"); assert it carries a digit.dot.digit.
+        // Prints a semver-ish line (e.g. "jcma 0.1.0"); assert it carries a digit.dot.digit.
         assertTrue(r.out().matches("(?s).*\\d+\\.\\d+.*"), "version output should contain a version number: " + r.out());
     }
 
